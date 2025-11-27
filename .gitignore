@@ -1,0 +1,54 @@
+# ----------------------
+# Python
+# ----------------------
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pdb
+*.egg-info/
+.env
+*.env
+.env.*
+.venv/
+venv/
+ENV/
+build/
+dist/
+pip-wheel-metadata/
+
+# ----------------------
+# FastAPI / Alembic
+# ----------------------
+alembic/versions/__pycache__/
+migrations/versions/__pycache__/
+*.sqlite
+*.db
+instance/
+
+# ----------------------
+# Logs
+# ----------------------
+*.log
+logs/
+
+# ----------------------
+# IDEs & Editor Files
+# ----------------------
+.vscode/
+.idea/
+*.code-workspace
+
+# ----------------------
+# OS Files
+# ----------------------
+.DS_Store
+Thumbs.db
+
+# ----------------------
+# Node / Frontend (if any)
+# ----------------------
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
