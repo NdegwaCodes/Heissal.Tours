@@ -39,6 +39,8 @@ PERMISSIONS: dict[str, str] = {
     "supplier:manage": "Manage suppliers",
     "destination:read": "View destinations",
     "destination:manage": "Manage destinations",
+    "accommodation:read": "View accommodations, room types, meal plans and rates",
+    "accommodation:manage": "Manage accommodations, room types, meal plans and rates",
 }
 
 # Reference read/manage permission keys, grouped for role assignment.
@@ -48,6 +50,7 @@ _REFERENCE_READ = [
     "fx:read",
     "supplier:read",
     "destination:read",
+    "accommodation:read",
 ]
 
 # --- System roles and their initial permissions ---

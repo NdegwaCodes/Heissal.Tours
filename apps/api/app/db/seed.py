@@ -13,6 +13,7 @@ from sqlalchemy import insert, select
 from app.core.config import settings
 from app.core.security import hash_password
 from app.db.session import AsyncSessionLocal
+from app.modules.accommodations.models import MealPlan
 from app.modules.currency.models import Currency
 from app.modules.rbac.models import Permission, Role, role_permissions
 from app.modules.rbac.permissions import PERMISSIONS, ROLE_DEFINITIONS
@@ -32,6 +33,14 @@ DEFAULT_RESIDENCE_CATEGORIES = [
     ("ea_resident", "East African Resident", 2, "KES"),
     ("resident", "Resident", 3, "USD"),
     ("non_resident", "Non-Resident", 4, "USD"),
+]
+
+DEFAULT_MEAL_PLANS = [
+    ("RO", "Room Only"),
+    ("BB", "Bed & Breakfast"),
+    ("HB", "Half Board"),
+    ("FB", "Full Board"),
+    ("AI", "All Inclusive"),
 ]
 
 
@@ -128,6 +137,13 @@ async def seed() -> None:
                         key=key, name=name, sort_order=order, default_currency_code=ccy
                     )
                 )
+
+        existing_mp = {
+            m.code for m in (await db.execute(select(MealPlan))).scalars().all()
+        }
+        for code, name in DEFAULT_MEAL_PLANS:
+            if code not in existing_mp:
+                db.add(MealPlan(code=code, name=name))
 
         await db.commit()
         print("[seed] done")
