@@ -53,6 +53,20 @@ make seed                   # permissions, roles, superuser
 make api-dev                # uvicorn on :8000
 ```
 
+## Quick start (admin app, local)
+
+With the API running on `:8000`:
+
+```bash
+pnpm install
+API_BASE_URL=http://localhost:8000 pnpm --filter @heissal/admin dev   # http://localhost:3000
+```
+
+Sign in with the seeded superuser (`FIRST_SUPERUSER_EMAIL` / `FIRST_SUPERUSER_PASSWORD`).
+The admin talks to the API only through its server-side BFF (`/api/proxy/*`), so JWTs
+live in httpOnly cookies and never touch browser JS. (A Docker image for the admin is
+added in a later pass; for now run it with pnpm as above.)
+
 ## Common commands
 
 | Command | What it does |
