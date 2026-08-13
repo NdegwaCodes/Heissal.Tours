@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+jobs:
+  backend:
+    name: Backend (lint, typecheck, test)
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: heissal
+          POSTGRES_PASSWORD: heissal
+          POSTGRES_DB: heissal
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U heissal"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    env:
+      POSTGRES_HOST: 127.0.0.1
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: heissal
+      POSTGRES_PASSWORD: heissal
+      POSTGRES_DB: heissal
+      REDIS_URL: redis://127.0.0.1:6379/0
+      JWT_SECRET_KEY: ci_only_secret_change_me_0123456789abcdef
+      BACKEND_CORS_ORIGINS: http://localhost:3000
+      FIRST_SUPERUSER_EMAIL: admin@heissal.co.ke
+      FIRST_SUPERUSER_PASSWORD: ChangeMe123!
+
+    defaults:
+      run:
+        working-directory: apps/api
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Set up Python
+        run: uv python install 3.11
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Ruff (lint)
+        run: uv run ruff check .
+
+      - name: mypy (typecheck)
+        run: uv run mypy app
+
+      - name: Apply migrations
+        run: uv run alembic upgrade head
+
+      - name: Seed
+        run: uv run python -m app.db.seed
+
+      - name: Pytest
+        run: uv run pytest -q

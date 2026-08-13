@@ -1,0 +1,60 @@
+# Heissal Platform — local development stack.
+# `make up` (docker compose up -d --build). Admin app is added in Stage 1's
+# frontend milestone; for now the stack is db + redis + api.
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: heissal-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-heissal}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-heissal}
+      POSTGRES_DB: ${POSTGRES_DB:-heissal}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-heissal}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7
+    container_name: heissal-redis
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+    container_name: heissal-api
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-heissal}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-heissal}
+      POSTGRES_DB: ${POSTGRES_DB:-heissal}
+      REDIS_URL: redis://redis:6379/0
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-dev_only_secret_change_me}
+      BACKEND_CORS_ORIGINS: ${BACKEND_CORS_ORIGINS:-http://localhost:3000}
+      FIRST_SUPERUSER_EMAIL: ${FIRST_SUPERUSER_EMAIL:-admin@heissal.co.ke}
+      FIRST_SUPERUSER_PASSWORD: ${FIRST_SUPERUSER_PASSWORD:-ChangeMe123!}
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  pgdata:
