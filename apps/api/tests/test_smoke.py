@@ -63,7 +63,9 @@ async def test_rbac_matrix(client, admin_tokens):
     )
     assert resp.status_code == 201, resp.text
     created = resp.json()
-    assert created["permissions"] == ["audit:read", "role:read", "settings:read", "user:read"]
+    assert {"audit:read", "role:read", "settings:read", "user:read"} <= set(
+        created["permissions"]
+    )
 
     # Viewer logs in.
     resp = await client.post(

@@ -11,23 +11,32 @@ from app.db.base_class import Base  # noqa: F401
 # Import all models so they register on Base.metadata.
 from app.modules.audit.models import AuditLog  # noqa: F401
 from app.modules.auth.models import RefreshToken  # noqa: F401
+from app.modules.currency.models import Currency, ExchangeRate  # noqa: F401
+from app.modules.destinations.models import Destination  # noqa: F401
 from app.modules.rbac.models import (  # noqa: F401
     Permission,
     Role,
     role_permissions,
     user_roles,
 )
+from app.modules.residence.models import ResidenceCategory  # noqa: F401
 from app.modules.settings.models import AppSetting  # noqa: F401
+from app.modules.suppliers.models import Supplier  # noqa: F401
 from app.modules.users.models import User  # noqa: F401
 
 __all__ = [
     "Base",
     "AuditLog",
     "RefreshToken",
+    "Currency",
+    "ExchangeRate",
+    "Destination",
     "Permission",
     "Role",
     "role_permissions",
     "user_roles",
+    "ResidenceCategory",
     "AppSetting",
+    "Supplier",
     "User",
 ]

@@ -13,9 +13,26 @@ from sqlalchemy import insert, select
 from app.core.config import settings
 from app.core.security import hash_password
 from app.db.session import AsyncSessionLocal
+from app.modules.currency.models import Currency
 from app.modules.rbac.models import Permission, Role, role_permissions
 from app.modules.rbac.permissions import PERMISSIONS, ROLE_DEFINITIONS
+from app.modules.residence.models import ResidenceCategory
 from app.modules.users.models import User
+
+# Editable starting data (admins can change/add these later — not business rules).
+DEFAULT_CURRENCIES = [
+    ("KES", "Kenyan Shilling", "KSh", 2),
+    ("USD", "US Dollar", "$", 2),
+    ("EUR", "Euro", "€", 2),
+    ("GBP", "Pound Sterling", "£", 2),
+]
+
+DEFAULT_RESIDENCE_CATEGORIES = [
+    ("citizen", "Kenyan Citizen", 1, "KES"),
+    ("ea_resident", "East African Resident", 2, "KES"),
+    ("resident", "Resident", 3, "USD"),
+    ("non_resident", "Non-Resident", 4, "USD"),
+]
 
 
 async def seed() -> None:
@@ -92,6 +109,25 @@ async def seed() -> None:
             print(f"[seed] created superuser {email}")
         else:
             print(f"[seed] superuser {email} already exists")
+
+        # --- Reference defaults (Stage 2) — editable, not business rules ---
+        existing_ccy = {
+            c.code for c in (await db.execute(select(Currency))).scalars().all()
+        }
+        for code, name, symbol, dp in DEFAULT_CURRENCIES:
+            if code not in existing_ccy:
+                db.add(Currency(code=code, name=name, symbol=symbol, decimal_places=dp))
+
+        existing_rc = {
+            r.key for r in (await db.execute(select(ResidenceCategory))).scalars().all()
+        }
+        for key, name, order, ccy in DEFAULT_RESIDENCE_CATEGORIES:
+            if key not in existing_rc:
+                db.add(
+                    ResidenceCategory(
+                        key=key, name=name, sort_order=order, default_currency_code=ccy
+                    )
+                )
 
         await db.commit()
         print("[seed] done")
