@@ -1,0 +1,62 @@
+"""Permission catalogue and system-role definitions (seed source of truth).
+
+Permissions are `resource:action` strings. New ones are added here and applied
+by the seed/migration. Role→permission mappings below are the *initial* system
+defaults; they are editable data in the admin UI afterwards.
+"""
+
+from __future__ import annotations
+
+from typing import TypedDict
+
+
+class RoleDefinition(TypedDict):
+    name: str
+    description: str
+    permissions: list[str]
+
+
+# --- Permission catalogue (Stage 1) ---
+PERMISSIONS: dict[str, str] = {
+    "user:read": "View users",
+    "user:create": "Create users",
+    "user:update": "Update users",
+    "user:manage_roles": "Assign roles to users",
+    "role:read": "View roles",
+    "role:create": "Create roles",
+    "role:update": "Edit role permissions",
+    "audit:read": "View the audit log",
+    "settings:read": "View application settings",
+    "settings:update": "Change application settings",
+}
+
+# --- System roles and their initial permissions ---
+# `admin` gets every Stage-1 permission. Others are least-privilege starting
+# points that later stages extend (quote:*, lead:*, booking:* …).
+ROLE_DEFINITIONS: dict[str, RoleDefinition] = {
+    "admin": {
+        "name": "Administrator",
+        "description": "Full administrative access.",
+        "permissions": list(PERMISSIONS.keys()),
+    },
+    "sales_agent": {
+        "name": "Sales Agent",
+        "description": "Creates quotes and manages clients (quote perms added in Stage 2).",
+        "permissions": ["user:read", "role:read"],
+    },
+    "operations": {
+        "name": "Operations",
+        "description": "Trip operations and fleet (extended in Stage 8).",
+        "permissions": ["user:read"],
+    },
+    "finance": {
+        "name": "Finance",
+        "description": "Payments and financial reporting (extended in Stage 7).",
+        "permissions": ["user:read", "audit:read"],
+    },
+    "viewer": {
+        "name": "Viewer",
+        "description": "Read-only access.",
+        "permissions": ["user:read", "role:read", "audit:read", "settings:read"],
+    },
+}

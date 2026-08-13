@@ -1,0 +1,21 @@
+{
+  "name": "heissal-platform",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Heissal Tours & Travel Platform — API-first tour sales & operations platform (monorepo)",
+  "packageManager": "pnpm@10.28.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "test": "turbo run test"
+  },
+  "devDependencies": {
+    "turbo": "^2.5.0",
+    "prettier": "^3.3.3"
+  }
+}
