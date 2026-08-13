@@ -9,6 +9,12 @@ from __future__ import annotations
 from app.db.base_class import Base  # noqa: F401
 
 # Import all models so they register on Base.metadata.
+from app.modules.accommodations.models import (  # noqa: F401
+    Accommodation,
+    AccommodationRate,
+    MealPlan,
+    RoomType,
+)
 from app.modules.audit.models import AuditLog  # noqa: F401
 from app.modules.auth.models import RefreshToken  # noqa: F401
 from app.modules.currency.models import Currency, ExchangeRate  # noqa: F401
@@ -26,6 +32,10 @@ from app.modules.users.models import User  # noqa: F401
 
 __all__ = [
     "Base",
+    "Accommodation",
+    "AccommodationRate",
+    "MealPlan",
+    "RoomType",
     "AuditLog",
     "RefreshToken",
     "Currency",
