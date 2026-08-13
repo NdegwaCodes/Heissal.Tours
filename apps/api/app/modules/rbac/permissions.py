@@ -28,7 +28,27 @@ PERMISSIONS: dict[str, str] = {
     "audit:read": "View the audit log",
     "settings:read": "View application settings",
     "settings:update": "Change application settings",
+    # --- Stage 2: reference / catalogue ---
+    "residence:read": "View residence categories",
+    "residence:manage": "Manage residence categories",
+    "currency:read": "View currencies",
+    "currency:manage": "Manage currencies",
+    "fx:read": "View exchange rates",
+    "fx:manage": "Manage exchange rates",
+    "supplier:read": "View suppliers",
+    "supplier:manage": "Manage suppliers",
+    "destination:read": "View destinations",
+    "destination:manage": "Manage destinations",
 }
+
+# Reference read/manage permission keys, grouped for role assignment.
+_REFERENCE_READ = [
+    "residence:read",
+    "currency:read",
+    "fx:read",
+    "supplier:read",
+    "destination:read",
+]
 
 # --- System roles and their initial permissions ---
 # `admin` gets every Stage-1 permission. Others are least-privilege starting
@@ -41,8 +61,8 @@ ROLE_DEFINITIONS: dict[str, RoleDefinition] = {
     },
     "sales_agent": {
         "name": "Sales Agent",
-        "description": "Creates quotes and manages clients (quote perms added in Stage 2).",
-        "permissions": ["user:read", "role:read"],
+        "description": "Creates quotes and manages clients; reads the catalogue.",
+        "permissions": ["user:read", "role:read", *_REFERENCE_READ],
     },
     "operations": {
         "name": "Operations",
@@ -57,6 +77,6 @@ ROLE_DEFINITIONS: dict[str, RoleDefinition] = {
     "viewer": {
         "name": "Viewer",
         "description": "Read-only access.",
-        "permissions": ["user:read", "role:read", "audit:read", "settings:read"],
+        "permissions": ["user:read", "role:read", "audit:read", "settings:read", *_REFERENCE_READ],
     },
 }
