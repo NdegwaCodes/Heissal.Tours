@@ -77,3 +77,22 @@ jobs:
 
       - name: Pytest
         run: uv run pytest -q
+
+  frontend:
+    name: Frontend (admin build + typecheck)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: Typecheck admin
+        run: pnpm --filter @heissal/admin typecheck
+      - name: Build admin
+        run: pnpm --filter @heissal/admin build
