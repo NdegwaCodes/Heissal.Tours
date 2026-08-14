@@ -19,6 +19,7 @@ from app.modules.audit.models import AuditLog  # noqa: F401
 from app.modules.auth.models import RefreshToken  # noqa: F401
 from app.modules.currency.models import Currency, ExchangeRate  # noqa: F401
 from app.modules.destinations.models import Destination  # noqa: F401
+from app.modules.park_fees.models import ParkFee  # noqa: F401
 from app.modules.rbac.models import (  # noqa: F401
     Permission,
     Role,
@@ -36,6 +37,7 @@ __all__ = [
     "AccommodationRate",
     "MealPlan",
     "RoomType",
+    "ParkFee",
     "AuditLog",
     "RefreshToken",
     "Currency",
