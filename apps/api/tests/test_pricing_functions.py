@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
+from app.modules.activities.service import compute_activity_cost
 from app.modules.park_fees.service import classify_age, compute_park_fee
 
 
@@ -39,3 +40,15 @@ def test_compute_park_fee_math():
     assert result["child_total"] == Decimal("120")  # 40*1*3
     assert result["infant_total"] == Decimal("0")
     assert result["total"] == Decimal("540")
+
+
+def test_compute_activity_cost_math():
+    result = compute_activity_cost(
+        adult_price=Decimal("450"),
+        child_price=Decimal("250"),
+        adults=2,
+        children=1,
+    )
+    assert result["adult_total"] == Decimal("900")  # 450*2
+    assert result["child_total"] == Decimal("250")  # 250*1
+    assert result["total"] == Decimal("1150")
