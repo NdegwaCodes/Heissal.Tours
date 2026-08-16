@@ -45,6 +45,8 @@ PERMISSIONS: dict[str, str] = {
     "park_fee:manage": "Manage park and conservation fees",
     "activity:read": "View activities and activity rates",
     "activity:manage": "Manage activities and activity rates",
+    "vehicle:read": "View vehicles and fuel prices",
+    "vehicle:manage": "Manage vehicles and fuel prices",
 }
 
 # Reference read/manage permission keys, grouped for role assignment.
@@ -57,6 +59,7 @@ _REFERENCE_READ = [
     "accommodation:read",
     "park_fee:read",
     "activity:read",
+    "vehicle:read",
 ]
 
 # --- System roles and their initial permissions ---

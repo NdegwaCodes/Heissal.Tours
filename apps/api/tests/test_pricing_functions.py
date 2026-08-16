@@ -9,6 +9,7 @@ from decimal import Decimal
 
 from app.modules.activities.service import compute_activity_cost
 from app.modules.park_fees.service import classify_age, compute_park_fee
+from app.modules.vehicles.service import compute_transport_cost
 
 
 def test_classify_age_bounds():
@@ -52,3 +53,30 @@ def test_compute_activity_cost_math():
     assert result["adult_total"] == Decimal("900")  # 450*2
     assert result["child_total"] == Decimal("250")  # 250*1
     assert result["total"] == Decimal("1150")
+
+
+def test_compute_transport_cost_math():
+    # 210 km / 7 kmpl = 30 L; 30 * 1.5 = 45 fuel; +driver 35*2 +operating 20*2
+    r = compute_transport_cost(
+        distance_km=Decimal("210"),
+        consumption_kmpl=Decimal("7"),
+        fuel_price_per_litre=Decimal("1.5"),
+        days=2,
+        driver_cost_per_day=Decimal("35"),
+        daily_operating_cost=Decimal("20"),
+    )
+    assert r["fuel_litres"] == Decimal("30")
+    assert r["fuel_cost"] == Decimal("45.0")
+    assert r["total"] == Decimal("155")
+
+    # Game-drive multiplier halves effective km/L -> doubles fuel used (60 L)
+    r2 = compute_transport_cost(
+        distance_km=Decimal("210"),
+        consumption_kmpl=Decimal("7"),
+        fuel_price_per_litre=Decimal("1.5"),
+        days=2,
+        driver_cost_per_day=Decimal("35"),
+        daily_operating_cost=Decimal("20"),
+        consumption_multiplier=Decimal("2"),
+    )
+    assert r2["fuel_litres"] == Decimal("60")

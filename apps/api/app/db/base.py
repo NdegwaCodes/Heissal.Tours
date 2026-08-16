@@ -31,6 +31,7 @@ from app.modules.residence.models import ResidenceCategory  # noqa: F401
 from app.modules.settings.models import AppSetting  # noqa: F401
 from app.modules.suppliers.models import Supplier  # noqa: F401
 from app.modules.users.models import User  # noqa: F401
+from app.modules.vehicles.models import FuelPrice, Vehicle  # noqa: F401
 
 __all__ = [
     "Base",
@@ -54,4 +55,6 @@ __all__ = [
     "AppSetting",
     "Supplier",
     "User",
+    "Vehicle",
+    "FuelPrice",
 ]

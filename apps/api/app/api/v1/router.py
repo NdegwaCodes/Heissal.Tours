@@ -15,6 +15,8 @@ from app.modules.rbac.router import router as rbac_router
 from app.modules.residence.router import router as residence_router
 from app.modules.suppliers.router import router as suppliers_router
 from app.modules.users.router import router as users_router
+from app.modules.vehicles.router import fuel_router
+from app.modules.vehicles.router import router as vehicles_router
 
 api_router = APIRouter()
 api_router.include_router(health.router)
@@ -29,3 +31,5 @@ api_router.include_router(destinations_router)
 api_router.include_router(accommodations_router)
 api_router.include_router(park_fees_router)
 api_router.include_router(activities_router)
+api_router.include_router(vehicles_router)
+api_router.include_router(fuel_router)
