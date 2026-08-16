@@ -8,10 +8,12 @@ from app.api.v1 import health
 from app.modules.accommodations.router import router as accommodations_router
 from app.modules.activities.router import router as activities_router
 from app.modules.auth.router import router as auth_router
+from app.modules.clients.router import router as clients_router
 from app.modules.currency.router import router as currency_router
 from app.modules.destinations.router import router as destinations_router
 from app.modules.park_fees.router import router as park_fees_router
 from app.modules.pricing.router import router as pricing_router
+from app.modules.quotes.router import router as quotes_router
 from app.modules.rbac.router import router as rbac_router
 from app.modules.residence.router import router as residence_router
 from app.modules.suppliers.router import router as suppliers_router
@@ -35,3 +37,6 @@ api_router.include_router(activities_router)
 api_router.include_router(vehicles_router)
 api_router.include_router(fuel_router)
 api_router.include_router(pricing_router)
+# Stage 2 — quote domain
+api_router.include_router(clients_router)
+api_router.include_router(quotes_router)

@@ -49,6 +49,14 @@ PERMISSIONS: dict[str, str] = {
     "vehicle:manage": "Manage vehicles and fuel prices",
     "pricing:read": "View pricing configuration (markup/discount/tax defaults)",
     "pricing:manage": "Manage pricing configuration (markup/discount/tax defaults)",
+    # --- Stage 2.7: clients + quote domain ---
+    "client:read": "View clients",
+    "client:manage": "Create and edit clients",
+    "quote:create": "Create and assemble quotes",
+    "quote:read": "View quotes (client-facing figures)",
+    "quote:read_cost": "View internal cost and margin on quotes",
+    "quote:price_override": "Override a quote's price/markup",
+    "quote:approve_discount": "Approve discounts beyond the standard threshold",
 }
 
 # Reference read/manage permission keys, grouped for role assignment.
@@ -77,7 +85,15 @@ ROLE_DEFINITIONS: dict[str, RoleDefinition] = {
     "sales_agent": {
         "name": "Sales Agent",
         "description": "Creates quotes and manages clients; reads the catalogue.",
-        "permissions": ["user:read", "role:read", *_REFERENCE_READ],
+        "permissions": [
+            "user:read",
+            "role:read",
+            *_REFERENCE_READ,
+            "client:read",
+            "client:manage",
+            "quote:create",
+            "quote:read",
+        ],
     },
     "operations": {
         "name": "Operations",
@@ -87,11 +103,29 @@ ROLE_DEFINITIONS: dict[str, RoleDefinition] = {
     "finance": {
         "name": "Finance",
         "description": "Payments and financial reporting (extended in Stage 7).",
-        "permissions": ["user:read", "audit:read", "pricing:read", "pricing:manage"],
+        "permissions": [
+            "user:read",
+            "audit:read",
+            "pricing:read",
+            "pricing:manage",
+            "client:read",
+            "quote:read",
+            "quote:read_cost",
+            "quote:price_override",
+            "quote:approve_discount",
+        ],
     },
     "viewer": {
         "name": "Viewer",
         "description": "Read-only access.",
-        "permissions": ["user:read", "role:read", "audit:read", "settings:read", *_REFERENCE_READ],
+        "permissions": [
+            "user:read",
+            "role:read",
+            "audit:read",
+            "settings:read",
+            *_REFERENCE_READ,
+            "client:read",
+            "quote:read",
+        ],
     },
 }
