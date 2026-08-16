@@ -11,6 +11,7 @@ from app.modules.auth.router import router as auth_router
 from app.modules.currency.router import router as currency_router
 from app.modules.destinations.router import router as destinations_router
 from app.modules.park_fees.router import router as park_fees_router
+from app.modules.pricing.router import router as pricing_router
 from app.modules.rbac.router import router as rbac_router
 from app.modules.residence.router import router as residence_router
 from app.modules.suppliers.router import router as suppliers_router
@@ -33,3 +34,4 @@ api_router.include_router(park_fees_router)
 api_router.include_router(activities_router)
 api_router.include_router(vehicles_router)
 api_router.include_router(fuel_router)
+api_router.include_router(pricing_router)
