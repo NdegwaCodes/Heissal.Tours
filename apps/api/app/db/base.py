@@ -15,6 +15,7 @@ from app.modules.accommodations.models import (  # noqa: F401
     MealPlan,
     RoomType,
 )
+from app.modules.activities.models import Activity, ActivityRate  # noqa: F401
 from app.modules.audit.models import AuditLog  # noqa: F401
 from app.modules.auth.models import RefreshToken  # noqa: F401
 from app.modules.currency.models import Currency, ExchangeRate  # noqa: F401
@@ -33,6 +34,8 @@ from app.modules.users.models import User  # noqa: F401
 
 __all__ = [
     "Base",
+    "Activity",
+    "ActivityRate",
     "Accommodation",
     "AccommodationRate",
     "MealPlan",

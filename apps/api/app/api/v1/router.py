@@ -6,6 +6,7 @@ from fastapi import APIRouter
 
 from app.api.v1 import health
 from app.modules.accommodations.router import router as accommodations_router
+from app.modules.activities.router import router as activities_router
 from app.modules.auth.router import router as auth_router
 from app.modules.currency.router import router as currency_router
 from app.modules.destinations.router import router as destinations_router
@@ -27,3 +28,4 @@ api_router.include_router(suppliers_router)
 api_router.include_router(destinations_router)
 api_router.include_router(accommodations_router)
 api_router.include_router(park_fees_router)
+api_router.include_router(activities_router)
