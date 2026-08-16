@@ -23,8 +23,8 @@ target_metadata = Base.metadata
 
 
 def _sync_url() -> str:
-    """Convert the async SQLAlchemy URL to a sync psycopg2 URL for migrations."""
-    return settings.sqlalchemy_database_uri.replace("+asyncpg", "+psycopg2")
+    """The sync psycopg2 URL for migrations (keeps libpq SSL params intact)."""
+    return settings.sqlalchemy_sync_uri
 
 
 def run_migrations_offline() -> None:
