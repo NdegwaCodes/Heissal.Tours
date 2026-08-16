@@ -12,6 +12,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from fastapi import FastAPI, Request, status
+from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -75,9 +76,13 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(RequestValidationError)
     async def _validation_error(_: Request, exc: RequestValidationError) -> JSONResponse:
+        # jsonable_encoder makes error details safe to serialize — pydantic v2
+        # embeds the failing input and constraint context (e.g. a Decimal `ge`
+        # limit) in errors(), which JSONResponse cannot encode on its own.
+        details = jsonable_encoder(exc.errors())
         return JSONResponse(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            content=_envelope("VALIDATION_ERROR", "Invalid request.", exc.errors()),
+            content=_envelope("VALIDATION_ERROR", "Invalid request.", details),
         )
 
     @app.exception_handler(Exception)

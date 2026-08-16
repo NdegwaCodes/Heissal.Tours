@@ -1,12 +1,16 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from datetime import date as date_cls
+from decimal import Decimal
+
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.crud import CRUDService
 from app.core.deps import require_permission
 from app.db.session import get_db
+from app.modules.currency.fx import AdminExchangeRateProvider
 from app.modules.currency.models import Currency, ExchangeRate
 from app.modules.currency.schemas import (
     CurrencyCreate,
@@ -15,6 +19,7 @@ from app.modules.currency.schemas import (
     ExchangeRateCreate,
     ExchangeRateRead,
 )
+from app.modules.pricing.schemas import ConversionRead
 from app.modules.users.models import User
 
 router = APIRouter(tags=["reference"])
@@ -84,3 +89,31 @@ async def create_exchange_rate(
     await db.commit()
     await db.refresh(rate)
     return rate
+
+
+@router.get("/exchange-rates/convert", response_model=ConversionRead)
+async def convert_currency(
+    amount: Decimal = Query(..., ge=0),
+    from_currency: str = Query(..., min_length=3, max_length=3, alias="from"),
+    to_currency: str = Query(..., min_length=3, max_length=3, alias="to"),
+    on_date: date_cls | None = Query(None),
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_permission("fx:read")),
+):
+    """Convert an amount between currencies as of ``on_date`` (defaults to today).
+
+    Uses the admin-set exchange rates; a missing rate is a 404, never a silent 1:1.
+    """
+    when = on_date or date_cls.today()
+    provider = AdminExchangeRateProvider(db)
+    from_ccy, to_ccy = from_currency.upper(), to_currency.upper()
+    rate = await provider.effective_rate(from_ccy, to_ccy, when)
+    converted = amount * rate
+    return ConversionRead(
+        amount=amount,
+        from_currency=from_ccy,
+        to_currency=to_ccy,
+        on_date=when.isoformat(),
+        rate=rate,
+        converted=converted,
+    )

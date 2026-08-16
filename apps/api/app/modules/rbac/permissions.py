@@ -47,6 +47,8 @@ PERMISSIONS: dict[str, str] = {
     "activity:manage": "Manage activities and activity rates",
     "vehicle:read": "View vehicles and fuel prices",
     "vehicle:manage": "Manage vehicles and fuel prices",
+    "pricing:read": "View pricing configuration (markup/discount/tax defaults)",
+    "pricing:manage": "Manage pricing configuration (markup/discount/tax defaults)",
 }
 
 # Reference read/manage permission keys, grouped for role assignment.
@@ -60,6 +62,7 @@ _REFERENCE_READ = [
     "park_fee:read",
     "activity:read",
     "vehicle:read",
+    "pricing:read",
 ]
 
 # --- System roles and their initial permissions ---
@@ -84,7 +87,7 @@ ROLE_DEFINITIONS: dict[str, RoleDefinition] = {
     "finance": {
         "name": "Finance",
         "description": "Payments and financial reporting (extended in Stage 7).",
-        "permissions": ["user:read", "audit:read"],
+        "permissions": ["user:read", "audit:read", "pricing:read", "pricing:manage"],
     },
     "viewer": {
         "name": "Viewer",
