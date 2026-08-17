@@ -18,6 +18,11 @@ from app.modules.pricing.service import (
     apply_tax,
     compute_price_breakdown,
 )
+from app.modules.quotes.engine import (
+    TravellerInput,
+    classify_group,
+    compute_accommodation_cost,
+)
 from app.modules.vehicles.service import compute_transport_cost
 
 
@@ -147,3 +152,23 @@ def test_compute_price_breakdown_zero_internal_cost():
     r = compute_price_breakdown(Decimal("0"), markup_pct=Decimal("20"))
     assert r["selling_price"] == Decimal("0")
     assert r["gross_margin"] == Decimal("0")
+
+
+# --- Stage 2.8: engine pure helpers ------------------------------------------
+
+def test_compute_accommodation_cost():
+    assert compute_accommodation_cost(
+        rate_per_night=Decimal("500"), rooms=2, nights=3
+    ) == Decimal("3000")
+
+
+def test_classify_group_uses_age_then_type():
+    travellers = [
+        TravellerInput("adult"),            # no age -> declared adult
+        TravellerInput("adult", 40),        # age 40 -> adult by bounds
+        TravellerInput("child", 8),         # age 8 in 3..11 -> child
+        TravellerInput("child", 1),         # age 1 below 3 -> infant (age wins over type)
+        TravellerInput("infant"),           # no age -> declared infant
+    ]
+    counts = classify_group(travellers, 3, 11)
+    assert counts == {"adult": 2, "child": 1, "infant": 2}

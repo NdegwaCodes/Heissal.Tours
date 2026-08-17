@@ -169,3 +169,112 @@ class QuoteSummary(BaseModel):
     arrival_date: date
     departure_date: date
     created_at: datetime
+
+
+# --------------------------------------------------------------------------- #
+# Pricing (Stage 2.8)
+# --------------------------------------------------------------------------- #
+
+class CalculateRequest(BaseModel):
+    """A transient quote to price without persisting (live quote builder)."""
+
+    residence_category_id: uuid.UUID
+    presentation_currency: str = Field(min_length=3, max_length=3)
+    arrival_date: date
+    departure_date: date
+    markup_pct: Decimal | None = Field(default=None, ge=0)
+    discount_pct: Decimal | None = Field(default=None, ge=0, le=100)
+    tax_pct: Decimal | None = Field(default=None, ge=0)
+    travellers: list[TravellerIn] = Field(default_factory=list)
+    legs: list[LegIn] = Field(default_factory=list)
+    transport: list[TransportIn] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _check_dates(self) -> CalculateRequest:
+        if self.departure_date <= self.arrival_date:
+            raise ValueError("departure_date must be after arrival_date")
+        return self
+
+
+class PricingLineClient(BaseModel):
+    """A costed line as the client sees it — price only, never cost."""
+
+    category: str
+    description: str
+    quantity: Decimal
+    client_price: Decimal
+
+
+class PricingLineInternal(PricingLineClient):
+    """Staff view — adds the internal cost and its source currency."""
+
+    source_currency: str
+    internal_cost: Decimal
+
+
+class PricingResultClient(BaseModel):
+    presentation_currency: str
+    lines: list[PricingLineClient]
+    selling_price: Decimal
+
+
+class PricingResultInternal(BaseModel):
+    presentation_currency: str
+    lines: list[PricingLineInternal]
+    markup_pct: Decimal
+    discount_pct: Decimal
+    tax_pct: Decimal
+    internal_cost: Decimal
+    selling_subtotal: Decimal
+    discount_value: Decimal
+    after_discount: Decimal
+    tax: Decimal
+    selling_price: Decimal
+    gross_profit: Decimal
+    gross_margin: Decimal
+    needs_approval: bool
+
+
+class QuoteItemClient(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    category: str
+    description: str
+    quantity: Decimal
+    unit_price: Decimal
+
+
+class QuoteItemInternal(QuoteItemClient):
+    source_currency: str
+    internal_cost: Decimal
+
+
+class QuoteVersionSummary(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    version_number: int
+    currency: str
+    selling_price: Decimal
+    created_at: datetime
+
+
+class QuoteVersionClientRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    version_number: int
+    currency: str
+    selling_price: Decimal
+    created_at: datetime
+    items: list[QuoteItemClient]
+
+
+class QuoteVersionInternalRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    version_number: int
+    currency: str
+    internal_cost: Decimal
+    selling_price: Decimal
+    gross_profit: Decimal
+    gross_margin: Decimal
+    created_at: datetime
+    items: list[QuoteItemInternal]
