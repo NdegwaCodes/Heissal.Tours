@@ -31,7 +31,8 @@ This is the hard rule of the stage. Nothing below the line reaches the document:
 | **Agent cover fee** | Dates, nights, destination, group size |
 | Retained half of any supplier discount | Option comparison table, recommendation |
 | Chef fee and manual meal cost | Optional add-on prices, per person |
-| Which cost line each amount came from | *One total price, and nothing behind it* |
+| Which cost line each amount came from | Properties considered but not offered, with a client-safe reason (§3.3a) |
+| Why a property was *really* dropped, where the reason is commercial | *One total price, and nothing behind it* |
 
 The existing schema-level split (`quote:read_cost`) already enforces this for the API;
 the PDF renderer must use the **client** schema, never the internal one.
@@ -88,6 +89,29 @@ the PDF renderer must use the **client** schema, never the internal one.
   never half-charged; it is charged at the supplier's single-occupancy rate. Where a
   sheet gives no single rate, `single_supplement` on top of the shared rate is the
   fallback (3 sheets price it that way).
+
+### 3.3a Minimum stay
+
+Confirmed 2026-08-24. Nine of the thirty-two readable sheets state a minimum stay,
+usually over the festive period — Temple Point: "Minimum stay between 20th Dec and 2nd
+Jan : 4 Nights".
+
+- **A property whose minimum stay the request does not meet is not offered.** The rate
+  is not available for that stay, so pricing it anyway would quote a figure the supplier
+  would refuse to honour.
+- **It is still shown on the document as a missed-out option**, recorded in
+  `quote_rejected_candidates` with the reason. This is the same mechanism the reference
+  quotation uses for Diani Cottages (declined because it caps at 16 guests): the client
+  sees that the property was considered and why it did not work, which reads as due
+  diligence rather than an omission.
+- The check is per stay, not per night: a 3-night request against a 4-night minimum
+  fails even if only one of those nights falls inside the restricted window.
+- `min_nights` already exists on `accommodation_rates`, so this is engine behaviour in
+  3.3, not a schema change.
+- **Rejection reasons are client-facing prose.** `reason` is rendered on the document
+  verbatim, so it may only ever contain something safe to show — "requires a minimum
+  stay of 4 nights over the festive period", never a cost, margin or supplier-relations
+  reason. An internal-only rejection does not belong in this table (§2).
 
 ### 3.4 Meal plans
 
@@ -491,6 +515,16 @@ ask "what did we quote in June and what did it become" without a data warehouse.
 | Air travel | **Never sold** — no ticketing licence; flights excluded from every quote (§3.8) |
 | Non-resident pricing | Applies to hotel rates, entrance fees AND activity fees; already modelled (§3.6a) |
 
+## 8a. Resolved 2026-08-24 (this round)
+
+| Question | Answer |
+|---|---|
+| USD to KES conversion | Fixed at **130**, seeded as contract data (§3.5b) |
+| VAT basis on stored rates | **Inclusive**, confirmed across the corpus (§3.2) |
+| Resident vs non-resident | Confirmed as a real split, and it arrives as separate documents (§3.6a, §5a) |
+| A document's stated discount % | Applies to **that document's** rates to give our rate (§3.5) |
+| Minimum stay not met | **Refuse the property, show it as a missed-out option** (§3.3a) |
+
 ## 9. Open questions
 
 1. **The real font files** — being supplied. Until then the template runs on labelled
@@ -501,14 +535,9 @@ ask "what did we quote in June and what did it become" without a data warehouse.
 2. **Airport transfers** — assumed still quotable for a client who books their own
    flight, since the transfer is a road service even though the ticket is not ours to
    sell (§3.8). Confirm, or exclude anything air-adjacent entirely.
-3. **Minimum-stay rules** — 9 sheets state one (Temple Point: "Minimum stay between
-   20th Dec and 2nd Jan: 4 Nights"). `min_nights` exists on the rate row; what is not
-   decided is what the engine should do when a request violates it — refuse to offer
-   that property, warn the agent, or price it anyway. Refusing silently would drop a
-   viable option, so this needs a decision before 3.3.
-4. **Occupancy beyond triple** — sheets stop at triple; a 4-guest villa is a different
+3. **Occupancy beyond triple** — sheets stop at triple; a 4-guest villa is a different
    room type with its own rate. Assumed sufficient.
-5. **Cancellation and payment terms** — stated on 21 sheets and currently not stored
+4. **Cancellation and payment terms** — stated on 21 sheets and currently not stored
    anywhere. They are contract terms rather than pricing inputs, so they are out of
    scope for pricing, but they may belong on the quotation document as disclosure.
 

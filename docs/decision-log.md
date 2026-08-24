@@ -186,3 +186,13 @@ it, verified on the three hardest layouts. Because 32 of 35 documents carry a us
 layer, the deterministic parser is the primary path and vision/OCR is the fallback for the
 three image-only scans — the reverse ordering would put a per-document model cost on every
 upload for no accuracy gain.
+
+**A minimum stay not met removes the option but not the mention** (Stage 3, 2026-08-24)
+Nine supplier sheets state a minimum stay, mostly over the festive period. Pricing a
+property whose minimum the request misses would quote a rate the supplier would refuse to
+honour, so it is not offered. Dropping it silently is the wrong other extreme: the client
+cannot tell whether a well-known property was overlooked or ruled out. It is therefore
+recorded in `quote_rejected_candidates` and printed on the document with its reason, the
+same mechanism the reference quotation uses for Diani Cottages and its 16-guest cap. That
+makes rejection reasons client-facing text by definition, so a commercial reason (margin,
+supplier relations) must never be written there.
