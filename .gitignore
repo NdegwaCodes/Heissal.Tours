@@ -49,3 +49,6 @@ logs/
 *.code-workspace
 .DS_Store
 Thumbs.db
+
+# --- Git bundles (delivery artifacts; commits already live in history) ---
+*.bundle
