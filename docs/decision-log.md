@@ -113,3 +113,30 @@ The brand faces aren't available yet and cannot be identified reliably from a PD
 so close equivalents stand in — but only via `--font-display` / `--font-body` defined in one
 place, making the eventual swap a two-line change. The placeholder is labelled in the
 template header so a stand-in is never mistaken for the real brand type.
+
+**Agent cover fee is added after profit and never marked up** (Stage 3, 2026-08-24)
+A manually entered amount that reaches the client at face value: `(cost + contingency) x
+1.24 + agent_cover_fee`. Kept outside the profit calculation deliberately — marking it up
+would inflate a pass-through, and burying it inside the cost basis would make it accrue
+both contingency and profit. It is folded into the quoted total rather than itemised.
+
+**STO rates are preferred outright, not compared** (Stage 3, 2026-08-24)
+Sell-To-Operator rates are materially cheaper than any halved rack discount, so where a
+document carries one it wins with no comparison step. Rack is the fallback, used as-is
+unless a discount has been supplied, in which case half of it passes to the client. The
+earlier "take whichever is cheaper" idea was dropped as a comparison that never changes
+the answer.
+
+**A child is charged as an adult unless the hotel says otherwise** (Stage 3, 2026-08-24)
+Hotels set their own age policies (commonly: over 11 pays adult), so the bounds live with
+the property's rate rather than globally, mirroring the per-fee age bounds park fees already
+use. Where a rate sheet is silent, adult pricing applies — the system does not invent a
+child discount, for the same reason it never guesses a missing rate.
+
+**Transport mode is a property of the destination; transfers price on destination x vehicle**
+(Stage 3, 2026-08-24)
+Some places are reached by rail, some by air, some only by road, so the available modes and
+their tariffs hang off the destination and the agent picks one per quote. Transfer prices key
+on both destination and vehicle type — a Coaster and a 5-7 seater are different prices for
+the same leg — which makes transfers a lookup table rather than something derived from km
+and fuel like the safari vehicle model.
