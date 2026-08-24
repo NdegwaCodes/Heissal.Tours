@@ -28,8 +28,10 @@ This is the hard rule of the stage. Nothing below the line reaches the document:
 |---|---|
 | Supplier/STO/rack rates, per-hotel cost | Final per-person rate and group total |
 | Profit (24%), contingency (5%) | Inclusions list, rooming, meal plan |
-| Retained half of any supplier discount | Dates, nights, destination, group size |
-| Which cost line each amount came from | Option comparison table, recommendation |
+| **Agent cover fee** | Dates, nights, destination, group size |
+| Retained half of any supplier discount | Option comparison table, recommendation |
+| Chef fee and manual meal cost | Optional add-on prices, per person |
+| Which cost line each amount came from | *One total price, and nothing behind it* |
 
 The existing schema-level split (`quote:read_cost`) already enforces this for the API;
 the PDF renderer must use the **client** schema, never the internal one.
@@ -77,10 +79,10 @@ the PDF renderer must use the **client** schema, never the internal one.
   does this in prose for Pendo's "group meal arrangement").
 - If the rate includes full board, meals are catered for — no separate meal line.
 - **Chef cost applies only to BnB options and bed-and-breakfast hotel rates**, and is
-  **entered per meal**. Never added to a half-board or full-board option. The food cost
-  itself is a separate manual entry, so an option carries both a chef fee per meal and a
-  meal cost, with the meal count derived from the stay length and the plan's gap
-  (BB → lunch + dinner).
+  **entered manually per meal for the whole group** — one chef cooks for everyone, so it
+  is a group fee, not a per-person one. Never added to a half-board or full-board option.
+  The food cost itself is a separate manual entry, with the meal count derived from the
+  stay length and the plan's gap (BB → lunch + dinner).
 
 ### 3.4a Child pricing
 
@@ -142,7 +144,8 @@ group_total     = per_person × pax         # per-person first, then multiply
 - **Contingency accrues profit** — it sits inside `cost_basis`, as modelled above.
 - **Agent cover fee is manual and sits outside the profit calculation.** It is added
   after the 24%, so it is passed to the client at face value and never marked up.
-  Entered per quote option; folded into the total rather than itemised on the document.
+  Entered per quote option and **never named on the document** — like profit and
+  contingency, it is backend-only. The client sees one total price and nothing behind it.
 - Realised margin on a discounted-rack option is therefore `24% + contingency + the
   retained half-discount`, which is why all three numbers are tracked separately.
 
@@ -155,9 +158,19 @@ Per-person is only meaningful when every traveller pays the same. It is **suppre
 favour of the total booking price** when the group is not uniform:
 
 - mixed traveller types (e.g. 1 adult + 1 child, §3.4a), or
-- **mixed residency** — resident and non-resident rates differ, so a mixed group has no
-  single per-person figure. The existing `residence_category` drives which rate is
-  selected per traveller.
+- **mixed residency** (below).
+
+### 3.6a Resident vs non-resident
+
+The gap is large and it applies in **three** places, not one: **hotel rates, park and
+conservation entrance fees, and activity fees**. All three already carry
+`residence_category_id` in the existing schema, so no new structure is needed — the
+residence category selected on the quote drives rate selection across every one of them,
+and a rate missing for that category is a 404 rather than a silent fallback to the
+resident price.
+
+A group mixing residents and non-residents has no single per-person figure, so those
+quotes show the total booking price only.
 
 ### 3.7 Option selection
 
@@ -182,19 +195,34 @@ is chosen then determines what else the quote must contain.
 | Mode | Cost basis |
 |---|---|
 | Own/hired vehicle (Coaster, Land Cruiser) | per vehicle per day (existing model) |
-| SGR | per person per ticket, by class |
-| Flight | per person per ticket |
+| SGR | per person per one-way ticket, by class |
 | Transfer | per leg, **priced by destination × vehicle type** |
+
+**Air travel is never sold.** Heissal does not hold the licence to ticket flights, so
+flight charges are excluded from every quote and "flight" is not an offerable line-haul
+mode. Airport transfers remain quotable for a client who arranges their own flight — the
+transfer is a road service, the ticket is not ours to sell.
+
+**SGR tariffs** (per person, one way, seeded as the current values — held as
+effective-dated rows in `destination_transport_modes`, never hard-coded, since fares
+move):
+
+| Class | Fare |
+|---|---|
+| Economy | KES 1,500 |
+| Business | KES 12,000 |
+
+A return journey is two segments, so a 25-pax economy round trip is
+`25 × 1,500 × 2 = KES 75,000`.
 
 - **Transfer prices key on both destination and vehicle type.** A Coaster transfer and a
   5–7 seater transfer are different prices for the same leg, and the same vehicle costs
   differently in different destinations. So transfers are a lookup table
   (destination, vehicle type/capacity class → price per leg), effective-dated like every
   other rate, not a figure derived from km and fuel.
-- **Transfers are mandatory whenever line-haul is rail or air**: pickup → terminus,
-  terminus → hotel, and the same in reverse. A quote using SGR or a flight without
-  transfer legs is incomplete and should be rejected by validation, not silently
-  under-priced.
+- **Transfers are mandatory whenever line-haul is rail**: pickup → terminus,
+  terminus → hotel, and the same in reverse. An SGR quote without transfer legs is
+  incomplete and should be rejected by validation, not silently under-priced.
 - **VVIP transport is an optional client-facing cost**, quoted as an add-on.
 
 ### 3.9 Optional extras
@@ -344,23 +372,22 @@ ask "what did we quote in June and what did it become" without a data warehouse.
 | Quote validity | **30 days** (§3.11) |
 | Activities | Location-based, like hotels (§3.9) |
 | Cover image | Per destination (§3.11) |
-| Agent cover fee | Manual, added **after** profit and never marked up (§3.6) |
+| Agent cover fee | Manual, added **after** profit, never marked up, **never named on the document** (§3.6) |
+| Chef fee basis | Whole group per meal, entered manually (§3.4) |
+| SGR fares | Economy KES 1,500 / business KES 12,000 per person one way, effective-dated (§3.8) |
+| Air travel | **Never sold** — no ticketing licence; flights excluded from every quote (§3.8) |
+| Non-resident pricing | Applies to hotel rates, entrance fees AND activity fees; already modelled (§3.6a) |
 
 ## 9. Open questions
 
-Small ones, none blocking 3.1:
-
-1. **Chef fee basis.** "Per meal" — per meal for the group (one chef cooking), or per
-   meal per person? Modelled as per-group-per-meal; the manual meal (food) cost is
-   modelled per person per meal. Confirm or flip.
-2. **Agent cover fee basis and visibility.** A lump sum per quote option, or per person?
-   And should it ever appear as a named line on the document, or always stay folded into
-   the total? Modelled as a per-option lump sum, folded in.
-3. **SGR / flight tariff maintenance.** Effective-dated tariffs are assumed (fares move,
-   like fuel prices). Who keeps them current, and do you quote a specific class?
-4. **VAT exceptions** — does a zero-rated or non-resident case ever arise? `vat_pct`
-   already supports it; I only need to know whether it happens.
-5. **The real font files**, when available (needed for 3.5's final pass).
+1. **The real font files** — being supplied. Until then the template runs on labelled
+   placeholders behind `--font-display` / `--font-body` (§3.11). If the sample was built
+   in Claude Design, the artboard's own CSS names the faces; failing that, the PDF's
+   embedded font table lists them (Acrobat → Document Properties → Fonts, or extract the
+   `/BaseFont` entries from the file).
+2. **Airport transfers** — assumed still quotable for a client who books their own
+   flight, since the transfer is a road service even though the ticket is not ours to
+   sell (§3.8). Confirm, or exclude anything air-adjacent entirely.
 
 ## 10. Build order
 
