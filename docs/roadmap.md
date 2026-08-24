@@ -55,7 +55,7 @@ pipeline, template map, open questions. **Read that, not this summary.**
 Reference template: `HFC Bank Diani Quotation.pdf` (25-pax corporate coastal retreat,
 six accommodation options) — supplied by the client and now the target output.
 
-- ☐ 3.1 Schema: quote options, rejected candidates, property images, activity price tiers, transport segments, rate provenance (VAT basis, rack vs STO, stated discount)
+- ☑ 3.1 Schema + migration `03e1ff30d1ad` — 11 new tables (quote options, version options, rejected candidates, transport segments, destination transport modes, transfer rates, supplier documents + extractions, property/destination images, activity price tiers) and column additions for rate provenance, child policy, group pax, validity and the selected option. Upgrade/downgrade round-trip verified, `alembic check` clean, NOT NULL backfill tested on a populated table.
 - ☐ 3.2 Supplier-document ingestion — PDF/image extract → **confirm** → stored date-ranged rates
 - ☐ 3.3 Option pricing — cheapest-within-hotel, meal-plan fallback chain, ceil(pax/capacity) rooming with full-price single, half-discount pass-through, 5% contingency + 20–25% profit
 - ☐ 3.4 Multi-option quote assembly (3–9 hotels + 1–2 BnBs), recommendation, rejected candidates

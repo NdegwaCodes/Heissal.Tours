@@ -20,6 +20,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
@@ -58,6 +59,9 @@ class Accommodation(UUIDPKMixin, TimestampMixin, Base):
     website: Mapped[str | None] = mapped_column(String(255), nullable=True)
     images: Mapped[list[str]] = mapped_column(JSONB, default=list, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    # Stage 3: the stored per-property description the quotation paraphrases, so
+    # a repeat client does not receive identical copy twice.
+    blurb: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     room_types: Mapped[list[RoomType]] = relationship(
         "RoomType",
@@ -120,3 +124,39 @@ class AccommodationRate(UUIDPKMixin, TimestampMixin, Base):
     single_supplement: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), nullable=True)
     min_nights: Mapped[int | None] = mapped_column(Integer, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+    # -- Stage 3: VAT basis, rate kind, provenance, child policy ------------- #
+    # Kenyan rate sheets quote VAT-inclusive by default. An exclusive source is
+    # normalised (x 1.16) at ingestion, and this records what the stored number
+    # already contains so it can never be taxed twice.
+    # server_default as well as default: these columns are NOT NULL and are
+    # being added to a table that already holds rows, so the database needs a
+    # value to backfill with or the migration cannot apply.
+    vat_inclusive: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default=text("true"), nullable=False
+    )
+    vat_pct: Mapped[Decimal] = mapped_column(
+        Numeric(5, 2), default=Decimal("16"), server_default=text("16"), nullable=False
+    )
+    # rack | sto — an STO (sell-to-operator) rate is used as the cost directly;
+    # a rack rate is used as-is unless a discount was supplied, in which case
+    # half of it passes to the client.
+    rate_kind: Mapped[str] = mapped_column(
+        String(10), default="rack", server_default="rack", nullable=False
+    )
+    # The discount the supplier stated, as stated. The half that reaches the
+    # client is derived at pricing time, never stored pre-applied.
+    supplier_discount_pct: Mapped[Decimal | None] = mapped_column(
+        Numeric(6, 3), nullable=True
+    )
+    # The rate sheet this row came from, so any price is traceable to evidence.
+    source_document_id: Mapped[uuid.UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("supplier_documents.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    # Per-property child age policy (commonly: over 11 pays adult). NULL bounds
+    # mean the sheet was silent, and the default is to charge as an adult — the
+    # system does not invent a child discount.
+    child_min_age: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    child_max_age: Mapped[int | None] = mapped_column(Integer, nullable=True)
