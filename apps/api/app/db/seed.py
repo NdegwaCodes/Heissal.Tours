@@ -7,6 +7,8 @@ Run with: `python -m app.db.seed` (or `make seed`).
 from __future__ import annotations
 
 import asyncio
+from datetime import date
+from decimal import Decimal
 
 from sqlalchemy import insert, select
 
@@ -14,7 +16,7 @@ from app.core.config import settings
 from app.core.security import hash_password
 from app.db.session import AsyncSessionLocal
 from app.modules.accommodations.models import MealPlan
-from app.modules.currency.models import Currency
+from app.modules.currency.models import Currency, ExchangeRate
 from app.modules.rbac.models import Permission, Role, role_permissions
 from app.modules.rbac.permissions import PERMISSIONS, ROLE_DEFINITIONS
 from app.modules.residence.models import ResidenceCategory
@@ -33,6 +35,18 @@ DEFAULT_RESIDENCE_CATEGORIES = [
     ("ea_resident", "East African Resident", 2, "KES"),
     ("resident", "Resident", 3, "USD"),
     ("non_resident", "Non-Resident", 4, "USD"),
+]
+
+# The USD->KES rate is a CONTRACT rate, not a market rate: supplier rate sheets
+# state it themselves (Swahili Beach's 2026 STO agreement: "FOR RESIDENT RATES
+# IN USD YOU MUST PLEASE USE CONVERSION RATE OF 130 KES"). It is seeded as an
+# ordinary effective-dated exchange_rates row rather than a constant in code, so
+# it stays auditable and an admin can supersede it by adding a later row when a
+# supplier restates it — no deploy needed. Without this row the engine raises
+# NotFoundError on any USD property quoted in KES, which until now only tests
+# ever set up.
+CONTRACT_FX_RATES = [
+    ("USD", "KES", Decimal("130"), date(2026, 1, 1)),
 ]
 
 DEFAULT_MEAL_PLANS = [
@@ -135,6 +149,29 @@ async def seed() -> None:
                 db.add(
                     ResidenceCategory(
                         key=key, name=name, sort_order=order, default_currency_code=ccy
+                    )
+                )
+
+        for base, quote, rate, eff in CONTRACT_FX_RATES:
+            exists = (
+                await db.execute(
+                    select(ExchangeRate.id)
+                    .where(
+                        ExchangeRate.base_currency == base,
+                        ExchangeRate.quote_currency == quote,
+                        ExchangeRate.effective_from == eff,
+                    )
+                    .limit(1)
+                )
+            ).scalar()
+            if exists is None:
+                db.add(
+                    ExchangeRate(
+                        base_currency=base,
+                        quote_currency=quote,
+                        rate=rate,
+                        effective_from=eff,
+                        source="contract",
                     )
                 )
 

@@ -42,7 +42,12 @@ class AdminExchangeRateProvider:
                 ExchangeRate.quote_currency == quote,
                 ExchangeRate.effective_from <= on_date,
             )
-            .order_by(ExchangeRate.effective_from.desc())
+            # created_at breaks ties, and ties are real: two rows can share an
+            # effective_from (an admin correcting a rate re-enters it for the
+            # same day). Without a tiebreak the winner is whatever order the
+            # database happens to return, so the same quote could price at two
+            # different rates on two runs. Latest entry for the day wins.
+            .order_by(ExchangeRate.effective_from.desc(), ExchangeRate.created_at.desc())
             .limit(1)
         )
         return (await self.db.execute(stmt)).scalar_one_or_none()

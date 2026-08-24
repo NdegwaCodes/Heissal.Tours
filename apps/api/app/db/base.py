@@ -12,6 +12,7 @@ from app.db.base_class import Base  # noqa: F401
 from app.modules.accommodations.models import (  # noqa: F401
     Accommodation,
     AccommodationRate,
+    AccommodationSupplement,
     MealPlan,
     RoomType,
 )
@@ -69,6 +70,7 @@ __all__ = [
     "ActivityRate",
     "Accommodation",
     "AccommodationRate",
+    "AccommodationSupplement",
     "MealPlan",
     "RoomType",
     "ParkFee",

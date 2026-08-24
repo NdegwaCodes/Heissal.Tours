@@ -94,6 +94,7 @@ class AccommodationRate(UUIDPKMixin, TimestampMixin, Base):
             "room_type_id",
             "meal_plan_id",
             "residence_category_id",
+            "occupancy",
             "effective_from",
             name="uq_accommodation_rate_period",
         ),
@@ -119,6 +120,14 @@ class AccommodationRate(UUIDPKMixin, TimestampMixin, Base):
     effective_from: Mapped[date] = mapped_column(Date, index=True, nullable=False)
     effective_to: Mapped[date] = mapped_column(Date, index=True, nullable=False)
     currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    # How many guests this price covers. Supplier sheets quote "per room per
+    # night" and then give a different figure per occupancy (Temple Point 2027:
+    # Creek Deluxe FB is 28,400 single but 37,600 double), so the rate is only
+    # meaningful together with the headcount it was quoted for. 2 is the default
+    # because a twin/double shared by two is the ordinary case.
+    occupancy: Mapped[int] = mapped_column(
+        Integer, default=2, server_default=text("2"), nullable=False
+    )
     rate_per_night: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
     child_rate: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), nullable=True)
     single_supplement: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), nullable=True)
@@ -138,14 +147,19 @@ class AccommodationRate(UUIDPKMixin, TimestampMixin, Base):
     vat_pct: Mapped[Decimal] = mapped_column(
         Numeric(5, 2), default=Decimal("16"), server_default=text("16"), nullable=False
     )
-    # rack | sto — an STO (sell-to-operator) rate is used as the cost directly;
-    # a rack rate is used as-is unless a discount was supplied, in which case
-    # half of it passes to the client.
+    # rack | sto. What we PAY is always the sheet rate less the whole stated
+    # discount -- that is what makes the sheet "our rate". The kind decides only
+    # what enters the client-facing build-up:
+    #   sto  -> the paid figure itself (STO sheets are already operator rates);
+    #   rack -> the sheet rate less HALF the discount, so the client sees half
+    #           the concession and the other half is retained as margin.
+    # Both are derived at pricing time. See design doc section 3.5.
     rate_kind: Mapped[str] = mapped_column(
         String(10), default="rack", server_default="rack", nullable=False
     )
-    # The discount the supplier stated, as stated. The half that reaches the
-    # client is derived at pricing time, never stored pre-applied.
+    # The discount the supplier stated, exactly as stated and never stored
+    # pre-applied. Keeping the sheet's own number means any quoted price can be
+    # reconciled against the PDF it came from; a pre-netted rate cannot.
     supplier_discount_pct: Mapped[Decimal | None] = mapped_column(
         Numeric(6, 3), nullable=True
     )
@@ -160,3 +174,88 @@ class AccommodationRate(UUIDPKMixin, TimestampMixin, Base):
     # system does not invent a child discount.
     child_min_age: Mapped[int | None] = mapped_column(Integer, nullable=True)
     child_max_age: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+
+# A supplement's amount means nothing without knowing what it multiplies by.
+SUPPLEMENT_BASES = (
+    "per_person_per_night",
+    "per_person",
+    "per_room_per_night",
+    "per_room",
+)
+# festive: a seasonal loading (Christmas / New Year). gala: a compulsory dinner
+# on a named date. other: anything a sheet states that is neither.
+SUPPLEMENT_KINDS = ("festive", "gala", "other")
+
+
+class AccommodationSupplement(UUIDPKMixin, TimestampMixin, Base):
+    """A charge a property adds on top of the nightly rate for a date window.
+
+    Twenty of the thirty-two readable 2026/27 rate sheets carry one, and eight
+    make a gala dinner compulsory, so this is not an edge case: without it a
+    December quote silently under-charges. Temple Point, for instance, states
+    "Supplement Christmas: KSH 3300 per person per night (24.12 & 25.12)" —
+    a per-person amount, a two-day window, and mandatory.
+
+    Deliberately a separate table rather than more columns on
+    ``AccommodationRate``: a supplement has its own date window (narrower than
+    the season it falls inside), its own charging basis, and applies across
+    several room types at once. Folding it into the rate row would mean
+    duplicating it per room type and losing its window.
+    """
+
+    __tablename__ = "accommodation_supplements"
+    __table_args__ = (
+        UniqueConstraint(
+            "accommodation_id",
+            "label",
+            "effective_from",
+            name="uq_accommodation_supplement_period",
+        ),
+    )
+
+    accommodation_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("accommodations.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+    # NULL on any of these three means "applies regardless" — sheets usually
+    # state a festive supplement once for the whole property, not per room.
+    room_type_id: Mapped[uuid.UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("room_types.id", ondelete="CASCADE"), nullable=True
+    )
+    meal_plan_id: Mapped[uuid.UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("meal_plans.id", ondelete="RESTRICT"), nullable=True
+    )
+    residence_category_id: Mapped[uuid.UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("residence_categories.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    label: Mapped[str] = mapped_column(String(120), nullable=False)
+    kind: Mapped[str] = mapped_column(String(10), default="festive", nullable=False)
+    basis: Mapped[str] = mapped_column(
+        String(20), default="per_person_per_night", nullable=False
+    )
+    amount: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    vat_inclusive: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default=text("true"), nullable=False
+    )
+    vat_pct: Mapped[Decimal] = mapped_column(
+        Numeric(5, 2), default=Decimal("16"), server_default=text("16"), nullable=False
+    )
+    effective_from: Mapped[date] = mapped_column(Date, index=True, nullable=False)
+    effective_to: Mapped[date] = mapped_column(Date, index=True, nullable=False)
+    # A compulsory supplement is priced whether or not anyone asked for it; an
+    # optional one is offered. Gala dinners are usually compulsory.
+    is_mandatory: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default=text("true"), nullable=False
+    )
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    source_document_id: Mapped[uuid.UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("supplier_documents.id", ondelete="SET NULL"),
+        nullable=True,
+    )

@@ -59,6 +59,10 @@ the PDF renderer must use the **client** schema, never the internal one.
   line on the document ("All prices inclusive of 16% VAT"), not an arithmetic step.
 - Every rate row carries `vat_inclusive` (bool) and `vat_pct` so the normalisation is
   auditable and the rate is never double-taxed.
+- **Confirmed against the real sheets (2026-08-24).** 24 of the 32 machine-readable
+  documents state the tax basis explicitly and all of them are inclusive — Temple Point
+  is typical: "Rates are per room per night, in KSH & inclusive of all taxes." The
+  inclusive default is therefore the common case, not an assumption.
 
 ### 3.3 Rooming
 
@@ -66,8 +70,24 @@ the PDF renderer must use the **client** schema, never the internal one.
   (25 pax → 13 rooms); Pendo's 4-guest villas are the capacity-4 case (25 → 7).
 - **An odd single room is charged in full**, not half. 25 pax = 12 twins + 1 room at
   the full room rate.
-- The charge is **per room**, not per person — a room accommodating 2 costs the same
-  whether 1 or 2 people occupy it.
+- The charge is **per room**, not per person.
+- **Corrected 2026-08-24 — the price of that room depends on how many sleep in it.**
+  The earlier rule here said a room costs the same whether 1 or 2 people occupy it.
+  The supplier documents contradict that: 26 of the 32 readable sheets quote a separate
+  figure per occupancy. Temple Point 2027/28, Creek Deluxe, full board, high season:
+
+  | Occupancy | Rate per room per night (KSH) |
+  |---|---|
+  | Single | 28,400 |
+  | Double | 37,600 |
+
+  A single is therefore neither half a double nor equal to one — it is its own quoted
+  price. So 25 pax in twins is 12 rooms at the double rate plus 1 at the single rate,
+  and `occupancy` is part of rate identity, not a rooming detail (see §4).
+- The "odd single charged in full" rule above still holds in the sense that the room is
+  never half-charged; it is charged at the supplier's single-occupancy rate. Where a
+  sheet gives no single rate, `single_supplement` on top of the shared rate is the
+  fallback (3 sheets price it that way).
 
 ### 3.4 Meal plans
 
@@ -115,6 +135,38 @@ the PDF renderer must use the **client** schema, never the internal one.
 - **Where there is no STO rate, use the rack rate as-is**, unless a discount has been
   supplied (either stated in the document or told to us), in which case the
   half-discount rule above applies.
+- **The stated discount belongs to the document that stated it** (confirmed
+  2026-08-24). A percentage is never global and never inferred from another sheet: the
+  figure written on a given rate sheet is applied to that sheet's rates to arrive at
+  our rate, which is why `supplier_discount_pct` sits on the rate row alongside
+  `source_document_id`. Different properties state different numbers in different
+  places — Baobab "10% Discount" and Reef "Issue 10% of this" in the document, Nyali
+  "15% Commission to us" only in the filename — so the ingestion confirm step must ask
+  for it per document rather than assume one house rule.
+- The percentage is stored **as stated and never pre-applied**. Both derived figures
+  (what we pay, what enters the build-up) are computed at pricing time, so any quoted
+  price can be reconciled against the PDF it came from.
+
+### 3.5a Supplements and compulsory gala dinners
+
+Confirmed 2026-08-24 from the rate documents; previously unmodelled.
+
+- 20 of the 32 readable sheets add a **festive supplement** on top of the nightly rate,
+  and 8 make a **gala dinner compulsory**. Omitting them silently under-charges every
+  December quote, so they are priced, not ignored.
+- A supplement has its **own date window**, which is narrower than — and not aligned
+  to — the season containing it. Temple Point: "Supplement Christmas: KSH 3300 per
+  person per night (24.12 & 25.12)" and the same again for New Year, inside a festive
+  season running 20.12–10.01.
+- Each carries a **charging basis** (`per_person_per_night`, `per_person`,
+  `per_room_per_night`, `per_room`) because the sheets differ, and the amount is
+  meaningless without it.
+- `is_mandatory` decides whether it is charged regardless of what the client asked for.
+  Gala dinners normally are.
+- Like every other stored amount it is VAT-inclusive by default, so it is never taxed
+  a second time.
+- Supplements are **internal cost lines** like any other: they raise the total the
+  client pays but are not itemised to the client (§2).
 
 ### 3.6 Margin build-up (backend only)
 
@@ -159,6 +211,20 @@ favour of the total booking price** when the group is not uniform:
 
 - mixed traveller types (e.g. 1 adult + 1 child, §3.4a), or
 - **mixed residency** (below).
+
+### 3.5b Currency conversion
+
+- **USD → KES is a fixed 130** (confirmed 2026-08-24). This is a *contract* rate, not a
+  market rate: the supplier agreements state it themselves — Swahili Beach's 2026 STO
+  contract reads "FOR RESIDENT RATES IN USD YOU MUST PLEASE USE CONVERSION RATE OF
+  130 KES". Quoting at a market rate would disagree with the supplier's own invoice.
+- It is stored as an ordinary effective-dated `exchange_rates` row seeded with
+  `source='contract'`, **not** a constant in code, so an admin can supersede it when a
+  supplier restates it and the change is auditable. Nothing business-related is
+  hard-coded (see CLAUDE.md).
+- Where two rates share an `effective_from`, the **later-entered** one wins. Without
+  that tiebreak the effective rate was undefined and the same quote could price two
+  ways on two runs — see the decision log.
 
 ### 3.6a Resident vs non-resident
 
@@ -287,12 +353,18 @@ New tables:
 | `destination_transport_modes` | Which modes reach a destination (road / rail / air) and their per-person or per-vehicle tariff, effective-dated |
 | `transfer_rates` | (destination, vehicle type/capacity) → price per leg, effective-dated |
 | `destination_images` | Cover hero per destination (§3.11) |
+| `accommodation_supplements` | Festive loadings and compulsory gala dinners: own date window, charging basis, mandatory flag (§3.5a) |
 
 Column additions:
 
 - `accommodation_rates`: `vat_inclusive`, `vat_pct`, `rate_kind` (`rack` / `sto`),
-  `discount_pct` (as stated by the supplier), `source_document_id`,
-  `child_min_age` / `child_max_age` / `child_rate` (per-property policy, §3.4a)
+  `supplier_discount_pct` (as stated by the supplier), `source_document_id`,
+  `child_min_age` / `child_max_age` / `child_rate` (per-property policy, §3.4a),
+  **`occupancy`** (§3.3 — how many guests the price covers)
+- The `accommodation_rates` uniqueness key is
+  `(room_type, meal_plan, residence_category, occupancy, effective_from)`. `occupancy`
+  is part of rate **identity**: without it the Single/Double/Triple rows of a real
+  sheet collide and the sheet cannot be stored at all.
 - `activities`: `is_mandatory`, `has_own_section` (already keyed to a destination)
 - `quotes`: `pax_count`, `profit_pct`, `contingency_pct`, `requested_meal_plan`,
   `valid_until`
@@ -317,6 +389,47 @@ upload PDF/image
 Extraction is **never trusted silently**. A wrong parsed money value that reaches a
 client is a commercial incident, and OCR on designed images is exactly where that
 happens. The source file stays attached so any rate is traceable to its document.
+
+### 5a. The real corpus (surveyed 2026-08-24)
+
+`H:\Tours\Hotel Prices` — 35 PDFs covering roughly 24 properties, all 2026/27 or
+2027/28. Nothing from it is committed to this repo: supplier contract rates are
+confidential and belong in the database, not in git history.
+
+| Property of the corpus | Finding |
+|---|---|
+| Machine-readable text layer | **32 of 35** |
+| Image-only scans (need OCR/vision) | 3 — Peak Hotels rack, Soames NETT ×2 |
+| Price by occupancy | 26 of 32 |
+| Named seasons (HIGH/LOW/SHOULDER/PEAK/EASTER) | 21 of 32 |
+| Explicit VAT basis, all inclusive | 24 of 32 |
+| Festive supplement | 20 of 32 |
+| Compulsory gala dinner | 8 of 32 |
+| Child policy | 23 of 32 |
+| Minimum-stay rule | 9 of 32 |
+| Resident / non-resident split | 15 of 32, usually as **two separate documents** |
+| Not rate sheets at all | 3 — one agent policy document, two activity brochures |
+
+**Text-layer extraction must be grid-aware, not line-based.** Naive line extraction
+(`pdftotext -layout`) silently misaligns: on the Swahili Beach contract the season
+labels and the price rows came out offset by several lines, which would bind a rate to
+the wrong date window — plausible output, wrong answer, no error raised. Reconstructing
+rows from word *coordinates* fixes it (proved with `pdftotext -table` on the three
+hardest layouts: Swahili Beach, Baobab's stacked season blocks, Temple Point's two
+side-by-side seasons). Build against a declared Python library that exposes word
+positions rather than shelling out to a binary that happens to be installed.
+
+Consequences for the pipeline:
+
+- The deterministic parser is the primary path (32/35); vision/OCR is the **fallback**
+  for the three scans, behind the same provider seam. Not the reverse — that ordering
+  is what keeps per-document cost near zero.
+- Residence category is a property of the **document**, so the confirm screen asks for
+  it once per upload rather than per row.
+- The discount percentage is often only in the **filename** ("15% Commission to us"),
+  not the page text, so it must be a confirmed field, never a parsed one.
+- `BO` / "bed only" appears in 4 sheets and maps to the existing `RO` (Room Only) meal
+  plan — a mapping table, not a new plan.
 
 ## 6. Image storage — decided
 
@@ -388,11 +501,24 @@ ask "what did we quote in June and what did it become" without a data warehouse.
 2. **Airport transfers** — assumed still quotable for a client who books their own
    flight, since the transfer is a road service even though the ticket is not ours to
    sell (§3.8). Confirm, or exclude anything air-adjacent entirely.
+3. **Minimum-stay rules** — 9 sheets state one (Temple Point: "Minimum stay between
+   20th Dec and 2nd Jan: 4 Nights"). `min_nights` exists on the rate row; what is not
+   decided is what the engine should do when a request violates it — refuse to offer
+   that property, warn the agent, or price it anyway. Refusing silently would drop a
+   viable option, so this needs a decision before 3.3.
+4. **Occupancy beyond triple** — sheets stop at triple; a 4-guest villa is a different
+   room type with its own rate. Assumed sufficient.
+5. **Cancellation and payment terms** — stated on 21 sheets and currently not stored
+   anywhere. They are contract terms rather than pricing inputs, so they are out of
+   scope for pricing, but they may belong on the quotation document as disclosure.
 
 ## 10. Build order
 
 - **3.1** Schema + migration for options, rejected candidates, images, price tiers,
-  transport segments, rate provenance columns
+  transport segments, rate provenance columns — *done*
+- **3.1b** Occupancy as part of rate identity, `accommodation_supplements`, seeded
+  contract FX rate — *done*. Forced by the real corpus: without it 26 of 32 sheets
+  could not be stored and every December quote under-charged.
 - **3.2** Rate ingestion: upload → extract → confirm screen → stored rates
 - **3.3** Option pricing: cheapest-within-hotel, meal fallback chain, rooming rule,
   discount/STO handling, contingency + profit, per-person rounding

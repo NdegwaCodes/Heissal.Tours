@@ -140,3 +140,49 @@ their tariffs hang off the destination and the agent picks one per quote. Transf
 on both destination and vehicle type — a Coaster and a 5-7 seater are different prices for
 the same leg — which makes transfers a lookup table rather than something derived from km
 and fuel like the safari vehicle model.
+
+**Occupancy is part of rate identity** (Stage 3.1b, 2026-08-24)
+Twenty-six of the thirty-two machine-readable supplier sheets quote a different price for
+the same room, meal plan and season depending on how many people sleep in it — Temple
+Point 2027/28 Creek Deluxe full board is 28,400 single against 37,600 double. The old
+uniqueness key `(room_type, meal_plan, residence_category, effective_from)` had no room
+for that, so those rows collided and most real sheets were literally unstorable. Adding
+`occupancy` to the key rather than inventing a derivation (single = half a double, or
+single = double) is the only faithful option: the sheets show a single is neither. This
+also corrects the earlier §3.3 rule that a room costs the same however many occupy it,
+which was inferred from a single sample quotation and contradicted by the corpus.
+
+**Supplements are their own table, not columns on a rate** (Stage 3.1b, 2026-08-24)
+A festive supplement has a date window narrower than and unaligned to the season that
+contains it (Temple Point loads 24–25 December inside a festive season running 20.12–10.01),
+its own charging basis, and applies across several room types at once. Folding it into the
+rate row would mean duplicating it per room type and losing its window. Twenty sheets carry
+one and eight make a gala dinner compulsory, so leaving it unmodelled meant every December
+quote silently under-charged.
+
+**The USD→KES 130 rate is seeded contract data, not a constant** (Stage 3.1b, 2026-08-24)
+The rate is fixed at 130 by the supplier agreements themselves ("FOR RESIDENT RATES IN USD
+YOU MUST PLEASE USE CONVERSION RATE OF 130 KES" — Swahili Beach 2026 STO contract), so
+quoting at a market rate would disagree with the supplier's own invoice. It is still stored
+as an ordinary effective-dated `exchange_rates` row with `source='contract'` rather than a
+literal in code, so an admin can supersede it without a deploy and the change is auditable.
+Until now the rate existed only inside individual tests, which meant a real deployment would
+have raised NotFoundError on the first USD property quoted in KES.
+
+**FX resolution breaks ties by entry order** (Stage 3.1b, 2026-08-24)
+Two `exchange_rates` rows can share an `effective_from` — an admin correcting a rate
+re-enters it for the same day — and the provider ordered by `effective_from DESC LIMIT 1`
+alone, so the winner was whatever order Postgres happened to return. The same quote could
+price two ways on two runs. Ordering by `(effective_from DESC, created_at DESC)` makes the
+latest entry for a day authoritative, which is also the intended business meaning of a
+correction. The bug was invisible because the test runner recreates the database each time;
+it surfaced only when the suite was run twice against a dirty one.
+
+**Text-layer PDFs are parsed by grid, not by line** (Stage 3.2 groundwork, 2026-08-24)
+Line-based extraction of the supplier sheets misaligns silently: on the Swahili Beach
+contract the season labels and price rows came out several lines apart, which would attach a
+rate to the wrong date window and raise no error. Coordinate-based row reconstruction fixes
+it, verified on the three hardest layouts. Because 32 of 35 documents carry a usable text
+layer, the deterministic parser is the primary path and vision/OCR is the fallback for the
+three image-only scans — the reverse ordering would put a per-document model cost on every
+upload for no accuracy gain.
