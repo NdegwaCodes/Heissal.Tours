@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable
+from typing import cast
+
 import redis.asyncio as aioredis
 
 from app.core.config import settings
@@ -15,3 +18,12 @@ redis_client: aioredis.Redis = aioredis.from_url(
 
 async def get_redis() -> aioredis.Redis:
     return redis_client
+
+
+async def ping() -> bool:
+    """Ping Redis.
+
+    redis-py annotates ``ping()`` as ``Awaitable[bool] | bool`` (the client is
+    generic over sync/async), so the await needs a cast to type-check.
+    """
+    return bool(await cast(Awaitable[bool], redis_client.ping()))

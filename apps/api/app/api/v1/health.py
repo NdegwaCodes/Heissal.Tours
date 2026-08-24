@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 from sqlalchemy import text
 
-from app.core.redis import redis_client
+from app.core.redis import ping as redis_ping
 from app.db.session import AsyncSessionLocal
 
 router = APIRouter(tags=["health"])
@@ -24,7 +24,7 @@ async def health() -> dict[str, str]:
         db_ok = "error"
 
     try:
-        await redis_client.ping()
+        await redis_ping()
     except Exception:
         redis_ok = "error"
 
