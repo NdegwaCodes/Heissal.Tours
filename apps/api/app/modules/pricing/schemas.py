@@ -15,6 +15,21 @@ class PricingConfigRead(BaseModel):
     max_discount_pct: Decimal
     quote_validity_days: int
 
+    # --- Stage 3 quotation build-up and quote shape ------------------------ #
+    # Exposed because the design doc requires them to be an admin edit rather
+    # than a deploy: "profit is a fixed 24% ... it lives in the existing
+    # app_settings pricing config (not hard-coded), with a per-quote override for
+    # the exception case" (§3.6). Left out of the schema they were configurable in
+    # name only.
+    contingency_pct: Decimal
+    profit_pct: Decimal
+    per_person_rounding: Decimal
+    quotation_validity_days: int
+    min_catered_options: int
+    max_catered_options: int
+    min_self_catering_options: int
+    max_self_catering_options: int
+
 
 class PricingConfigUpdate(BaseModel):
     """Partial update — only the provided fields are changed."""
@@ -25,6 +40,14 @@ class PricingConfigUpdate(BaseModel):
     discount_approval_threshold_pct: Decimal | None = Field(default=None, ge=0, le=100)
     max_discount_pct: Decimal | None = Field(default=None, ge=0, le=100)
     quote_validity_days: int | None = Field(default=None, ge=1)
+    contingency_pct: Decimal | None = Field(default=None, ge=0, le=100)
+    profit_pct: Decimal | None = Field(default=None, ge=0, le=100)
+    per_person_rounding: Decimal | None = Field(default=None, gt=0)
+    quotation_validity_days: int | None = Field(default=None, ge=1)
+    min_catered_options: int | None = Field(default=None, ge=1)
+    max_catered_options: int | None = Field(default=None, ge=1)
+    min_self_catering_options: int | None = Field(default=None, ge=0)
+    max_self_catering_options: int | None = Field(default=None, ge=0)
 
 
 class ConversionRead(BaseModel):

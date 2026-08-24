@@ -301,7 +301,36 @@ quotes show the total booking price only.
 - Options that fall back to a different meal plan, or whose structure isn't comparable
   (villa vs full-board resort), are flagged as such.
 - **Rejected candidates are recorded and shown** with a reason — the sample's Diani
-  Cottages entry (capacity 16 < 25 pax) demonstrates due diligence to the client.
+  Cottages entry (capacity 16 < 25 pax) demonstrates due diligence to the client. An
+  agent-typed refusal and an engine-derived one are distinguished by
+  `quote_rejected_candidates.source`, because re-pricing rewrites the engine's own refusals
+  and a typed one is not rediscoverable from any rate.
+
+### 3.7a What counts as a "BnB option"
+
+Settled 2026-08-25 in 3.4. §1 asks for "3–9 hotels plus 1–2 BnB options", which needs a
+definition of the split. The property `category` column is free text (`lodge`, `resort`,
+`camp`, whatever an admin typed), so counting on it would be counting on a convention nobody
+enforces.
+
+The distinction is taken from **whether pricing had to add a chef**: an option resolved onto
+a plan that leaves the guests to feed themselves is a self-catering option, and one resolved
+onto half or full board is catered. That is derived from the rates rather than from a label,
+and it is exactly the commercial difference the split is about. All four bounds live in
+`app_settings["pricing"]` (`min/max_catered_options`, `min/max_self_catering_options`),
+defaulted to the numbers above.
+
+### 3.7b Readiness is graded
+
+A quote can be **wrong** — an option that failed to price, a bed-and-breakfast option with
+no chef cost, no recommendation to lead on, two recommendations, more options than the
+template holds — or merely **thin**, offering two hotels where five would sell better. The
+first kind blocks issuing; the second is advice returned alongside. One boolean would either
+let an under-priced quote out or refuse a correct one.
+
+`GET /quotes/{id}/readiness` returns both kinds and writes nothing. `POST /quotes/{id}/issue`
+prices, then refuses on any blocking problem — reporting **all** of them at once, because
+fixing them one 400 at a time is how the second one ends up in the client's copy.
 
 ### 3.8 Transport
 
@@ -378,7 +407,23 @@ new table.
 - **Quotes are valid for 30 days** from issue, printed on the document. Past that the
   option must be re-priced rather than honoured, since supplier rates move — and because
   versions are immutable, re-pricing appends a new version and the expired one stays
-  readable.
+  readable. `valid_until` is stamped when the quote is **issued**, not when it was drafted:
+  a proposal built three weeks ago is still good for its full 30 days once it actually goes
+  out.
+- **Issuing is guarded by its own permission** (`quote:issue`), separate from
+  `quote:create`. Assembling a quote and putting a price in front of a client are different
+  levels of trust.
+- **An issued quote refuses assembly edits.** Versions are immutable but the quote they hang
+  off is not, and an option quietly added after the client received the document would make
+  the stored version disagree with what they are looking at. Re-issuing is the supported
+  path.
+- The version's **headline figures come from the recommended option** — it is the one being
+  proposed — with every option's figures kept beside it in `quote_version_options`, so
+  "what did the client actually see" stays answerable. `internal_cost` on the version is
+  what Heissal **pays**, not the costed subtotal: on a discounted rack rate those differ by
+  the retained half, and calling the costed figure "cost" would understate realised margin by
+  exactly that amount. Margin on the version is therefore profit + contingency + retained
+  half, which is what §3.5 says it is.
 - **The cover image is per destination**, not per quote: every Diani proposal opens on
   the same coastal cover, so the hero is an asset of the destination.
 - **Fonts:** the exact faces aren't available yet, so the template uses close

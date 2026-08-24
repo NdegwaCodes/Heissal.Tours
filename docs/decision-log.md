@@ -320,3 +320,57 @@ produced — the same quote could price two ways on two runs. It now breaks the 
 **highest** occupancy: a room selected without a headcount is the room as the hotel sells it,
 and a double is not priced as a single. Occupancy-aware selection for a group lives in
 `OptionPricingService`, not here.
+
+**A "BnB option" is one that needs a chef, not one with a category label** (Stage 3.4, 2026-08-25)
+The quote shape is "3-9 hotels plus 1-2 BnB options", which needs the split to be decidable.
+`accommodations.category` is free text an admin typed, so counting on it would be counting on
+a convention nothing enforces. The split is taken instead from whether pricing had to add a
+chef: an option resolved onto a plan that leaves the guests to feed themselves is
+self-catering. That is derived from the rates rather than from a label, and it is exactly the
+commercial difference the split is about. All four bounds live in pricing config.
+
+**Readiness is graded, not a boolean** (Stage 3.4, 2026-08-25)
+A quote can be wrong — an unpriced option, a bed-and-breakfast option with no chef cost, no
+recommendation, two recommendations — or merely thin, two hotels where five would sell better.
+One flag would either let an under-priced quote out or refuse a perfectly correct one. So
+problems carry a severity: blocking stops issuing, advisory is returned alongside. Issuing
+reports *every* blocking problem at once, because fixing them one 400 at a time is how the
+second one ends up in the client's copy.
+
+**Engine and agent refusals are told apart by column** (Stage 3.4, migration `15c4d3d4af6b`)
+Re-pricing rewrites the refusals the engine derives from the rates. An agent's typed refusal —
+the reference document's "Diani Cottages, caps at 16 guests" — is not rediscoverable from any
+rate, so the 3.3 implementation would have erased it on the next re-price. A NULL
+`accommodation_id` is not a usable discriminator: a manual refusal may well name a property we
+hold. Hence `source`, and an engine refusal cannot be deleted through the API — deleting it
+would only hide it until the next re-price.
+
+**A version's internal cost is what we pay, not the costed subtotal** (Stage 3.4, 2026-08-25)
+On a discounted rack rate the two differ by the retained half. Calling the costed figure
+"cost" would understate realised margin by exactly that amount, which is the number the
+business is run on. So `internal_cost = cost_subtotal - retained_discount`, and margin on the
+version comes out as profit + contingency + retained half — the three figures §3.5 insists on
+tracking apart, correctly added back together.
+
+**An issued quote refuses assembly edits** (Stage 3.4, 2026-08-25)
+Versions are immutable, but the quote they hang off is not. An option added after the client
+received the document would make the stored version disagree with what they are looking at,
+and the disagreement would be invisible from either side. Re-issuing is the supported path: it
+appends a new version and leaves the old one readable.
+
+**The Stage 3 pricing config was configurable in name only** (Stage 3.4, 2026-08-25)
+`profit_pct`, `contingency_pct`, `per_person_rounding` and `quotation_validity_days` were
+added to the config model in 3.3 but never to the read/update schemas, so no admin could see
+or change them through the API — the exact thing the design doc requires them to be ("in
+pricing config, not hard-coded, with a per-quote override for the exception case"). A value in
+a settings model that no endpoint exposes is a constant with extra steps.
+
+**Every collection listing is ordered** (Stage 3.4, 2026-08-25)
+`CRUDService.list()` applied a LIMIT with no ORDER BY, which is unordered in Postgres: which
+rows come back can change between runs for reasons nothing in the application controls. Once a
+table held more rows than the page, a freshly created record could be absent from the listing
+meant to show it — which is how it was found, when a Stage 2.7 test that creates a client and
+then looks it up started failing the day the suite crossed 200 clients. Listings are now
+newest-first on `created_at`, falling back to the UUIDv7 primary key, which is time-ordered
+and sorts the same way. The fix is in the shared base class, so it applies to every reference
+and catalogue endpoint at once rather than to the one that happened to break.

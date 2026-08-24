@@ -35,10 +35,25 @@ class CRUDService(Generic[ModelT]):
         return getattr(self.model, self.pk)
 
     async def list(self, *, limit: int = 200, active_only: bool = False) -> Sequence[ModelT]:
+        """A page of rows, newest first.
+
+        The ORDER BY is not cosmetic. A LIMIT without one is unordered in
+        Postgres — which rows come back can change between runs for reasons
+        nothing in the application controls — so once a table held more rows than
+        the page, a freshly created record could simply be absent from the
+        listing that was meant to show it. That is how this was found: a client
+        created and then looked up in the same test started failing the day the
+        suite crossed 200 clients.
+
+        Newest first is also the answer callers actually want from a collection
+        endpoint. ``created_at`` is used where the model has it, and the UUIDv7
+        primary key otherwise — v7 is time-ordered, so it sorts the same way.
+        """
         stmt = select(self.model)
         if active_only and hasattr(self.model, "is_active"):
             stmt = stmt.where(self.model.is_active.is_(True))  # type: ignore[attr-defined]
-        stmt = stmt.limit(limit)
+        newest = getattr(self.model, "created_at", None) or self._pk_col()
+        stmt = stmt.order_by(newest.desc()).limit(limit)
         return (await self.db.execute(stmt)).scalars().all()
 
     async def get(self, ident: Any) -> ModelT:

@@ -59,6 +59,10 @@ PERMISSIONS: dict[str, str] = {
     "quote:read": "View quotes (client-facing figures)",
     "quote:read_cost": "View internal cost and margin on quotes",
     "quote:price_override": "Override a quote's price/markup",
+    # Its own permission because it is the outward-facing act: it freezes an
+    # immutable version and puts a price in front of a client. Assembling a quote
+    # and sending one are different levels of trust.
+    "quote:issue": "Issue a quotation to a client (freezes an immutable version)",
     "quote:approve_discount": "Approve discounts beyond the standard threshold",
 }
 
@@ -96,6 +100,7 @@ ROLE_DEFINITIONS: dict[str, RoleDefinition] = {
             "client:manage",
             "quote:create",
             "quote:read",
+            "quote:issue",
         ],
     },
     "operations": {

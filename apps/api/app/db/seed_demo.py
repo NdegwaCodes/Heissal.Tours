@@ -252,8 +252,11 @@ async def seed_demo(db: AsyncSession) -> dict[str, Any]:
     # request must fall through the chain and land on BB + chef cost.
     await _rate(rooms["kaskazi_twin"], bb, citizen, "6000")
 
-    # Pendo villas: half board on a 4-guest unit.
-    await _rate(rooms["villa_two_bed"], hb, citizen, "16000")
+    # Pendo villas: half board on a 4-guest unit, priced AT four guests. The
+    # occupancy has to match the unit or the villa cannot be priced at all: a
+    # rate quoted for two says nothing about what four people in it cost, and
+    # inventing the difference is exactly what §3.3 forbids.
+    await _rate(rooms["villa_two_bed"], hb, citizen, "16000", occupancy=4)
 
     # Chui: bookable most of the year, but the festive window carries its own
     # rate AND a four-night minimum. A three-night December request must be

@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import require_permission
 from app.db.session import get_db
+from app.modules.quotes.assembly import QuoteAssemblyService
 from app.modules.quotes.models import QuoteVersion
 from app.modules.quotes.option_pricing import (
     OptionCosting,
@@ -25,14 +26,21 @@ from app.modules.quotes.schemas import (
     PricingResultInternal,
     QuoteCreate,
     QuoteOptionClientRead,
+    QuoteOptionIn,
     QuoteOptionInternalRead,
+    QuoteOptionResolvedRead,
+    QuoteOptionUpdate,
     QuoteRead,
     QuoteStatusUpdate,
     QuoteSummary,
     QuoteVersionClientRead,
     QuoteVersionInternalRead,
     QuoteVersionSummary,
+    ReadinessRead,
+    RejectedCandidateFullRead,
+    RejectedCandidateIn,
     RejectedCandidateRead,
+    SelectOptionIn,
     SupplementChargeInternal,
 )
 from app.modules.quotes.service import QuoteService
@@ -206,3 +214,126 @@ async def price_quote_options(
     """
     result = await OptionPricingService(db).price_options(quote_id)
     return _option_result(result, internal=_can_read_cost(actor))
+
+
+# --------------------------------------------------------------------------- #
+# Stage 3.4 assembly: options, refusals, readiness, issuing
+# --------------------------------------------------------------------------- #
+
+
+@router.post(
+    "/quotes/{quote_id}/options",
+    response_model=QuoteOptionResolvedRead,
+    status_code=201,
+)
+async def add_quote_option(
+    quote_id: uuid.UUID,
+    body: QuoteOptionIn,
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_permission("quote:create")),
+):
+    """Offer another property on the quote. Room type and plan resolve at pricing."""
+    return await QuoteAssemblyService(db).add_option(quote_id, body)
+
+
+@router.patch(
+    "/quotes/{quote_id}/options/{option_id}", response_model=QuoteOptionResolvedRead
+)
+async def update_quote_option(
+    quote_id: uuid.UUID,
+    option_id: uuid.UUID,
+    body: QuoteOptionUpdate,
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_permission("quote:create")),
+):
+    """Edit one option. `is_recommended: true` moves the recommendation here."""
+    return await QuoteAssemblyService(db).update_option(quote_id, option_id, body)
+
+
+@router.delete("/quotes/{quote_id}/options/{option_id}", status_code=204)
+async def remove_quote_option(
+    quote_id: uuid.UUID,
+    option_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_permission("quote:create")),
+):
+    await QuoteAssemblyService(db).remove_option(quote_id, option_id)
+
+
+@router.post(
+    "/quotes/{quote_id}/rejected-candidates",
+    response_model=RejectedCandidateFullRead,
+    status_code=201,
+)
+async def add_rejected_candidate(
+    quote_id: uuid.UUID,
+    body: RejectedCandidateIn,
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_permission("quote:create")),
+):
+    """Record a property considered and ruled out by hand (§3.3a).
+
+    The reason prints on the quotation verbatim, so it must contain only what is
+    safe to show a client — never a cost, margin or supplier-relations reason.
+    """
+    return await QuoteAssemblyService(db).add_rejected_candidate(quote_id, body)
+
+
+@router.delete(
+    "/quotes/{quote_id}/rejected-candidates/{candidate_id}", status_code=204
+)
+async def remove_rejected_candidate(
+    quote_id: uuid.UUID,
+    candidate_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_permission("quote:create")),
+):
+    """Remove an agent-typed refusal. Engine-derived ones are not removable."""
+    await QuoteAssemblyService(db).remove_rejected_candidate(quote_id, candidate_id)
+
+
+@router.get("/quotes/{quote_id}/readiness", response_model=ReadinessRead)
+async def quote_readiness(
+    quote_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_permission("quote:read")),
+):
+    """Whether the quote can be issued, and everything wrong with it either way.
+
+    Blocking problems would put a wrong figure in front of a client; advisory
+    ones only make for a weaker proposal. Writes nothing.
+    """
+    return await QuoteAssemblyService(db).readiness(quote_id)
+
+
+@router.post("/quotes/{quote_id}/issue", response_model=None)
+async def issue_quote(
+    quote_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(require_permission("quote:issue")),
+) -> QuoteVersionInternalRead | QuoteVersionClientRead:
+    """Freeze the quote into an immutable version and mark it sent (§3.11).
+
+    Prices the options first, then refuses on any blocking readiness problem —
+    reporting all of them at once. Re-issuing appends another version; nothing
+    already issued is ever rewritten.
+    """
+    version = await QuoteAssemblyService(db).issue(quote_id, actor_id=actor.id)
+    if _can_read_cost(actor):
+        return QuoteVersionInternalRead.model_validate(version)
+    return QuoteVersionClientRead.model_validate(version)
+
+
+@router.post("/quotes/{quote_id}/select", response_model=QuoteRead)
+async def select_quote_option(
+    quote_id: uuid.UUID,
+    body: SelectOptionIn,
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_permission("quote:create")),
+):
+    """Record which option the client chose (§7).
+
+    Does not change the quote's status: choosing an option and accepting a
+    quotation are separate events, and the gap between them is worth keeping.
+    """
+    return await QuoteAssemblyService(db).select_option(quote_id, body.option_id)

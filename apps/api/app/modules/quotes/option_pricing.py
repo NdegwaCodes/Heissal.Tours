@@ -210,11 +210,15 @@ class OptionPricingService:
             option.meal_plan_fallback_from = costing.meal_plan_fallback_from
             option.is_comparable = costing.is_comparable
 
+        # Only the engine's own refusals are replaced. An agent's typed one — the
+        # reference document's "Diani Cottages, caps at 16 guests" — is not
+        # rediscoverable from the rates, so re-pricing must leave it alone.
         stale = (
             (
                 await self.db.execute(
                     select(QuoteRejectedCandidate).where(
-                        QuoteRejectedCandidate.quote_id == quote.id
+                        QuoteRejectedCandidate.quote_id == quote.id,
+                        QuoteRejectedCandidate.source == "engine",
                     )
                 )
             )
@@ -231,6 +235,7 @@ class OptionPricingService:
                     name=refused.name,
                     reason=refused.reason,
                     sort_order=order,
+                    source="engine",
                 )
             )
         await self.db.commit()

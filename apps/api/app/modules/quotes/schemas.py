@@ -210,11 +210,14 @@ class QuoteRead(BaseModel):
     contingency_pct: Decimal | None
     requested_meal_plan_id: uuid.UUID | None
     valid_until: date | None
+    # Which option the client actually chose — the CRM's most valuable field (§7).
+    selected_option_id: uuid.UUID | None
+    selected_at: datetime | None
     travellers: list[TravellerRead]
     legs: list[LegRead]
     transport: list[TransportRead]
     options: list[QuoteOptionResolvedRead]
-    rejected_candidates: list[RejectedCandidateRead]
+    rejected_candidates: list[RejectedCandidateFullRead]
 
 
 class QuoteSummary(BaseModel):
@@ -325,6 +328,7 @@ class QuoteVersionClientRead(BaseModel):
     selling_price: Decimal
     created_at: datetime
     items: list[QuoteItemClient]
+    options: list[QuoteVersionOptionClientRead] = Field(default_factory=list)
 
 
 class QuoteVersionInternalRead(BaseModel):
@@ -338,6 +342,7 @@ class QuoteVersionInternalRead(BaseModel):
     gross_margin: Decimal
     created_at: datetime
     items: list[QuoteItemInternal]
+    options: list[QuoteVersionOptionInternalRead] = Field(default_factory=list)
 
 
 # --------------------------------------------------------------------------- #
@@ -427,3 +432,95 @@ class OptionPricingInternalResult(BaseModel):
     # Why a property on the quote could not be priced at all. Internal because it
     # describes gaps in our own rate data, not anything about the hotel.
     warnings: list[str]
+
+
+# --------------------------------------------------------------------------- #
+# Stage 3.4 assembly: options, refusals, readiness, issued versions
+# --------------------------------------------------------------------------- #
+
+
+class QuoteOptionUpdate(BaseModel):
+    """Partial edit of one option. Only the fields sent are changed.
+
+    Setting ``is_recommended`` to true clears it on every other option in the
+    same transaction — a document that leads on two properties leads on neither.
+    """
+
+    is_recommended: bool | None = None
+    sort_order: int | None = Field(default=None, ge=0)
+    agent_cover_fee: Decimal | None = Field(default=None, ge=0)
+    chef_fee_per_meal: Decimal | None = Field(default=None, ge=0)
+    manual_meal_cost: Decimal | None = Field(default=None, ge=0)
+    is_comparable: bool | None = None
+    notes: str | None = None
+
+
+class RejectedCandidateIn(BaseModel):
+    """A property the agent considered and ruled out (§3.3a).
+
+    ``accommodation_id`` is optional because a candidate may never have been in
+    the catalogue — the reference document's Diani Cottages is a name and a
+    reason, nothing more. ``reason`` is printed on the quotation verbatim, so it
+    must say only what is safe to show a client.
+    """
+
+    accommodation_id: uuid.UUID | None = None
+    name: str = Field(min_length=1, max_length=200)
+    reason: str = Field(min_length=1)
+    sort_order: int | None = Field(default=None, ge=0)
+
+
+class RejectedCandidateFullRead(RejectedCandidateRead):
+    """As stored: adds the id and who put it there. Staff-facing."""
+
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    sort_order: int
+    # engine | manual — an engine refusal is rewritten on every re-price.
+    source: str
+
+
+class ReadinessProblem(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    # blocking | advisory — only blocking problems stop a quote being issued.
+    severity: str
+    code: str
+    message: str
+
+
+class ReadinessRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    is_ready: bool
+    catered_options: int
+    self_catering_options: int
+    problems: list[ReadinessProblem]
+
+
+class SelectOptionIn(BaseModel):
+    option_id: uuid.UUID
+
+
+class QuoteVersionOptionClientRead(BaseModel):
+    """One option as frozen into a version: price only."""
+
+    model_config = ConfigDict(from_attributes=True)
+    accommodation_id: uuid.UUID | None
+    accommodation_name: str
+    meal_plan_label: str | None
+    rooms_required: int | None
+    currency: str
+    per_person: Decimal | None
+    selling_total: Decimal
+    is_recommended: bool
+    is_comparable: bool
+    sort_order: int
+
+
+class QuoteVersionOptionInternalRead(QuoteVersionOptionClientRead):
+    option_id: uuid.UUID | None
+    cost_subtotal: Decimal
+    contingency_value: Decimal
+    profit_value: Decimal
+    agent_cover_fee: Decimal
+    supplier_paid_total: Decimal | None
+    retained_discount: Decimal | None

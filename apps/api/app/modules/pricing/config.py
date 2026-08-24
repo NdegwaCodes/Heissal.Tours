@@ -44,3 +44,13 @@ class PricingConfig(BaseModel):
     per_person_rounding: Decimal = Field(default=Decimal("100"), gt=0)
     # A Stage 3 quotation is valid for 30 days, unlike the Stage 2 default.
     quotation_validity_days: int = Field(default=30, ge=1)
+
+    # --- Stage 3.4 quote shape (design doc §1, §3.7) ----------------------- #
+    # "3-9 hotels plus 1-2 BnB options." Held as configurable bounds rather than
+    # literals in a validator, and split by whether pricing had to add a chef —
+    # the only distinction in the data that actually means "the guests feed
+    # themselves". A property category string would not: it is free text.
+    min_catered_options: int = Field(default=3, ge=1)
+    max_catered_options: int = Field(default=9, ge=1)
+    min_self_catering_options: int = Field(default=1, ge=0)
+    max_self_catering_options: int = Field(default=2, ge=0)

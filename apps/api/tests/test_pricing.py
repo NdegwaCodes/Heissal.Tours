@@ -154,3 +154,38 @@ async def test_pricing_config_rejects_invalid(
 async def test_pricing_config_requires_permission(client):
     r = await client.get(f"{API}/pricing-config")
     assert r.status_code == 401
+
+
+async def test_the_stage_three_build_up_defaults_are_readable_and_editable(
+    client, admin_tokens, restore_pricing_config
+):
+    """"Profit is a fixed 24%, in pricing config, not hard-coded" (design §3.6).
+
+    It was configurable in name only until 3.4: the values existed on the config
+    model but were absent from the read and update schemas, so no admin could see
+    or change them through the API.
+    """
+    h = await _auth(admin_tokens)
+    body = (await client.get(f"{API}/pricing-config", headers=h)).json()
+    assert body["profit_pct"] == "24"
+    assert body["contingency_pct"] == "5"
+    assert body["per_person_rounding"] == "100"
+    assert body["quotation_validity_days"] == 30
+    # The quote-shape bounds: "3-9 hotels plus 1-2 BnB options" (§1).
+    assert body["min_catered_options"] == 3
+    assert body["max_catered_options"] == 9
+    assert body["min_self_catering_options"] == 1
+    assert body["max_self_catering_options"] == 2
+
+    patched = await client.patch(
+        f"{API}/pricing-config",
+        headers=h,
+        json={"profit_pct": "18", "contingency_pct": "0", "max_catered_options": 6},
+    )
+    assert patched.status_code == 200, patched.text
+    assert patched.json()["profit_pct"] == "18"
+    assert patched.json()["contingency_pct"] == "0"
+    assert patched.json()["max_catered_options"] == 6
+
+    again = (await client.get(f"{API}/pricing-config", headers=h)).json()
+    assert again["profit_pct"] == "18"

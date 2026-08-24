@@ -31,6 +31,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
@@ -40,6 +41,13 @@ from app.db.base_class import Base, TimestampMixin, UUIDPKMixin
 
 # Quote lifecycle states. Editable data flows, not a hard-coded price rule.
 QUOTE_STATUSES = ("draft", "sent", "accepted", "declined", "expired")
+
+# Who put a rejected candidate on the quote. The engine rewrites its own
+# refusals every time the options are re-priced; an agent's typed one must
+# survive that, so the two are told apart by column rather than by guessing
+# from a NULL accommodation_id (a manual refusal may well name a property we
+# hold in the catalogue).
+REJECTION_SOURCES = ("engine", "manual")
 
 
 class QuoteCounter(Base):
@@ -206,6 +214,15 @@ class QuoteVersion(UUIDPKMixin, Base):
         back_populates="version",
         lazy="selectin",
         cascade="all, delete-orphan",
+    )
+    # The per-option figures frozen into this version (Stage 3.4). A snapshot of
+    # a multi-option quote is meaningless without them: the headline is only the
+    # recommended option, and the client saw all of them.
+    options: Mapped[list[QuoteVersionOption]] = relationship(
+        "QuoteVersionOption",
+        lazy="selectin",
+        cascade="all, delete-orphan",
+        order_by="QuoteVersionOption.sort_order",
     )
 
 
@@ -422,6 +439,10 @@ class QuoteRejectedCandidate(UUIDPKMixin, TimestampMixin, Base):
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     reason: Mapped[str] = mapped_column(Text, nullable=False)
     sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # engine | manual — see REJECTION_SOURCES.
+    source: Mapped[str] = mapped_column(
+        String(10), default="engine", server_default=text("'engine'"), nullable=False
+    )
 
 
 class QuoteTransportSegment(UUIDPKMixin, TimestampMixin, Base):
