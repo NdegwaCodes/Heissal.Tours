@@ -12,8 +12,9 @@ so nothing in this module adds tax.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, timedelta
 from decimal import ROUND_CEILING, Decimal
+from typing import TypeVar
 
 # The chain to walk when a hotel has no rate for the plan the client asked for
 # (§3.4). Bed and breakfast is the end of the line: below it a chef and a manual
@@ -29,6 +30,38 @@ MEAL_PLAN_FALLBACK: dict[str, tuple[str, ...]] = {
 # Plans that already include the meals a guest needs, so no chef fee or manual
 # food cost belongs on the option (§3.4).
 PLANS_WITH_MEALS = frozenset({"FB", "AI"})
+
+# How many meals a day the chef has to cover on a plan that needs one — the
+# plan's *gap* (§3.4). Bed and breakfast leaves lunch and dinner; room only
+# leaves all three. Half board leaves lunch but never takes a chef, so it is
+# absent here on purpose rather than set to 1.
+MEAL_GAPS: dict[str, int] = {"BB": 2, "RO": 3}
+
+_R = TypeVar("_R")
+
+
+# --------------------------------------------------------------------------- #
+# The stay
+# --------------------------------------------------------------------------- #
+
+
+def stay_nights(arrival: date, departure: date) -> list[date]:
+    """The nights of a stay, as the dates a guest sleeps there.
+
+    Arrival to departure is counted in nights, so the departure date is not one
+    of them: a guest checking in on the 20th and out on the 23rd sleeps there on
+    the 20th, 21st and 22nd.
+
+    Rates are looked up **per night** rather than once for the whole stay,
+    because season windows do not line up with itineraries. A 18-22 December
+    booking crosses out of high season into festive; pricing every night at the
+    rate covering the arrival date would undercharge the last two, which on the
+    real sheets is a difference of thousands per room per night.
+    """
+    if departure <= arrival:
+        raise ValueError("departure must be after arrival")
+    span = (departure - arrival).days
+    return [arrival + timedelta(days=offset) for offset in range(span)]
 
 
 # --------------------------------------------------------------------------- #
@@ -66,6 +99,34 @@ def room_plan(pax: int, capacity: int) -> list[int]:
     return plan
 
 
+def rate_for_occupancy(
+    rates: dict[int, _R], occupancy: int
+) -> tuple[int, _R] | None:
+    """The rate quoted for a room holding ``occupancy`` guests.
+
+    An exact match is used when the sheet gives one, since a single and a double
+    are separately quoted prices and neither is derivable from the other (§3.3).
+
+    Failing that, the **smallest quoted occupancy that can still hold the
+    guests** is used — a lone guest in a hotel that only prices doubles pays the
+    double-room price, because that is the room being sold. A larger occupancy is
+    never rounded down to a smaller one: there is no honest way to put three
+    guests in a room the sheet only prices for two, so that returns ``None`` and
+    the room type drops out of the comparison rather than being mispriced.
+
+    The caller gets the occupancy that was actually used, so a derived figure can
+    be flagged instead of passing silently as a quoted one.
+    """
+    if occupancy <= 0:
+        raise ValueError("occupancy must be at least 1")
+    if occupancy in rates:
+        return occupancy, rates[occupancy]
+    larger = sorted(key for key in rates if key > occupancy)
+    if larger:
+        return larger[0], rates[larger[0]]
+    return None
+
+
 # --------------------------------------------------------------------------- #
 # Meal plans
 # --------------------------------------------------------------------------- #
@@ -97,6 +158,19 @@ def needs_chef(plan: str) -> bool:
     half-board or full-board option (§3.4).
     """
     return plan.upper() not in PLANS_WITH_MEALS and plan.upper() != "HB"
+
+
+def meals_needing_chef(plan: str, nights: int) -> int:
+    """How many group meals the chef has to cook over the stay (§3.4).
+
+    Derived from the stay length and the plan's gap rather than typed in, so a
+    four-night bed-and-breakfast option cannot be quoted with three days of food.
+    Returns 0 for a plan that feeds the guests already, which is what keeps a
+    chef off half-board and full-board options.
+    """
+    if nights < 0:
+        raise ValueError("nights cannot be negative")
+    return MEAL_GAPS.get(plan.upper(), 0) * nights
 
 
 # --------------------------------------------------------------------------- #
@@ -220,6 +294,18 @@ def minimum_stay_reason(nights: int, min_nights: int) -> str:
 # --------------------------------------------------------------------------- #
 # The build-up (§3.6)
 # --------------------------------------------------------------------------- #
+
+
+def uniform_group(traveller_types: list[str]) -> bool:
+    """Whether every traveller on the quote pays the same, so a per-person
+    figure is meaningful (§3.6, §3.6a).
+
+    An empty list is uniform: a group quote entered as a headcount rather than as
+    traveller rows is 25 adults paying one price. A mixed adult-and-child group
+    is not, and neither is a mixed-residency one — though residency is a single
+    field on the quote today, so only traveller type can vary here.
+    """
+    return len(set(traveller_types)) <= 1
 
 
 def round_up_to(value: Decimal, step: Decimal) -> Decimal:

@@ -16,17 +16,21 @@ from app.modules.quotes.options import (
     build_up,
     costed_rate,
     meal_plan_chain,
+    meals_needing_chef,
     meets_minimum_stay,
     minimum_stay_reason,
     needs_chef,
     nights_within,
+    rate_for_occupancy,
     resolve_meal_plan,
     retained_discount,
     room_plan,
     rooms_required,
     round_up_to,
+    stay_nights,
     supplement_cost,
     supplier_paid,
+    uniform_group,
 )
 
 D = Decimal
@@ -421,3 +425,115 @@ def test_zero_percentages_are_allowed_and_change_nothing():
     )
     assert result.selling_total == D("1000")
     assert result.per_person == D("1000")
+
+
+# --------------------------------------------------------------------------- #
+# The stay, as nights
+# --------------------------------------------------------------------------- #
+
+def test_a_stay_is_counted_in_nights_not_days():
+    nights = stay_nights(date(2026, 12, 20), date(2026, 12, 23))
+    # Checks in on the 20th, out on the 23rd: three nights, and the 23rd is not
+    # one of them.
+    assert nights == [date(2026, 12, 20), date(2026, 12, 21), date(2026, 12, 22)]
+
+
+def test_one_night_is_a_stay():
+    assert stay_nights(date(2026, 7, 1), date(2026, 7, 2)) == [date(2026, 7, 1)]
+
+
+def test_a_stay_across_a_year_boundary():
+    nights = stay_nights(date(2026, 12, 31), date(2027, 1, 2))
+    assert nights == [date(2026, 12, 31), date(2027, 1, 1)]
+
+
+@pytest.mark.parametrize(
+    "arrival,departure",
+    [
+        (date(2026, 7, 1), date(2026, 7, 1)),  # same day
+        (date(2026, 7, 2), date(2026, 7, 1)),  # backwards
+    ],
+)
+def test_a_stay_with_no_nights_is_refused(arrival, departure):
+    with pytest.raises(ValueError):
+        stay_nights(arrival, departure)
+
+
+# --------------------------------------------------------------------------- #
+# Per-occupancy rate selection (§3.3)
+# --------------------------------------------------------------------------- #
+
+# Temple Point 2027/28, Creek Deluxe, full board, high season — the real sheet.
+TEMPLE_POINT = {1: D("28400"), 2: D("37600")}
+
+
+def test_an_exact_occupancy_wins():
+    assert rate_for_occupancy(TEMPLE_POINT, 1) == (1, D("28400"))
+    assert rate_for_occupancy(TEMPLE_POINT, 2) == (2, D("37600"))
+
+
+def test_a_single_is_neither_half_a_double_nor_a_whole_one():
+    _, single = rate_for_occupancy(TEMPLE_POINT, 1)
+    _, double = rate_for_occupancy(TEMPLE_POINT, 2)
+    assert single != double / 2
+    assert single != double
+
+
+def test_an_unquoted_occupancy_takes_the_next_larger_room():
+    """A lone guest at a hotel that only prices doubles pays for the double."""
+    assert rate_for_occupancy({2: D("24000"), 3: D("30000")}, 1) == (2, D("24000"))
+
+
+def test_more_guests_than_any_quoted_room_is_not_priced():
+    """There is no honest way to put three guests in a room priced for two."""
+    assert rate_for_occupancy({1: D("6500"), 2: D("9000")}, 3) is None
+
+
+def test_no_rates_at_all_is_not_priced():
+    assert rate_for_occupancy({}, 2) is None
+
+
+def test_occupancy_must_be_positive():
+    with pytest.raises(ValueError):
+        rate_for_occupancy(TEMPLE_POINT, 0)
+
+
+# --------------------------------------------------------------------------- #
+# Chef meal counts (§3.4)
+# --------------------------------------------------------------------------- #
+
+def test_bed_and_breakfast_leaves_lunch_and_dinner():
+    assert meals_needing_chef("BB", 3) == 6
+
+
+def test_room_only_leaves_all_three_meals():
+    assert meals_needing_chef("RO", 3) == 9
+
+
+@pytest.mark.parametrize("plan", ["HB", "FB", "AI"])
+def test_a_fed_plan_needs_no_chef_meals(plan):
+    """Half board leaves lunch but never takes a chef, so it is zero, not one."""
+    assert meals_needing_chef(plan, 5) == 0
+    assert needs_chef(plan) is False
+
+
+def test_meal_counts_scale_with_the_stay():
+    assert meals_needing_chef("BB", 0) == 0
+    assert meals_needing_chef("bb", 10) == 20
+
+
+# --------------------------------------------------------------------------- #
+# When a per-person figure is meaningful (§3.6, §3.6a)
+# --------------------------------------------------------------------------- #
+
+def test_a_headcount_only_group_is_uniform():
+    """25 adults entered as pax_count, not as 25 traveller rows."""
+    assert uniform_group([]) is True
+
+
+def test_all_adults_is_uniform():
+    assert uniform_group(["adult"] * 25) is True
+
+
+def test_an_adult_and_a_child_is_not_uniform():
+    assert uniform_group(["adult", "child"]) is False

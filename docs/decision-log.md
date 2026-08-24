@@ -279,3 +279,44 @@ warning and wait for a person instead. Deciding whether to model a per-person ba
 is deferred until Stage 3.3 shows what the pricing engine needs. "per room" wins when a page
 says both, because a sheet stating a per-room basis usually mentions per person only for a
 supplement.
+
+**A single supplement is never added to a per-room rate** (Stage 3.3, 2026-08-25)
+§3.3 gave "single supplement on top of the shared rate" as the fallback where a sheet quotes
+no single-occupancy price. Implementing it against the demo catalogue produced an absurdity:
+a 4,000 supplement on a 24,000 double charges one guest 28,000 for the room two guests pay
+24,000 for. The rule is only coherent on a sheet priced per person sharing, which is how the
+three sheets that state a supplement are written — and our rates are stored per room. So the
+next larger room is charged **in full**, which is the other half of the same section's rule,
+and the stated supplement is raised as a warning, since its presence hints the sheet may have
+been ingested on the wrong basis. The design doc has been corrected rather than the code bent
+to match it.
+
+**Rates are looked up per night, not once per stay** (Stage 3.3, 2026-08-25)
+Season windows do not align with itineraries. A stay of 18-22 December crosses out of high
+season into festive, and selecting one rate for the whole stay — the Stage 2 engine's shape —
+would price those festive nights at the cheaper season, an undercharge of thousands per room
+per night that no assertion on a total would reveal. The cost is one indexed query per
+property and a loop in Python, not a query per night.
+
+**A gap in our rate data is not a client-facing refusal** (Stage 3.3, 2026-08-25)
+`quote_rejected_candidates.reason` prints on the quotation verbatim, so the table can only
+hold reasons a client may see. A minimum stay the itinerary does not meet is one. "No rate is
+loaded for these dates" is not: it describes our own catalogue, not the hotel, and rendering
+it would invent a refusal the supplier never made. Those cases return an internal warning on
+the pricing result, visible only to a role holding `quote:read_cost`.
+
+**The internal/client split is two schemas, not one filtered schema** (Stage 3.3, 2026-08-25)
+`QuoteOptionClientRead` has no field for cost, margin, supplier payments, the agent cover fee
+or the warning list, and `QuoteOptionInternalRead` extends it. A model that cannot represent a
+cost cannot leak one, however the document template changes later — whereas a single model
+filtered at render time leaks the first time someone adds a field and forgets the filter. The
+existing `_keys_everywhere` leak test now covers the option endpoint too.
+
+**Stage 2 rate selection got an explicit occupancy tiebreak** (Stage 3.3, 2026-08-25)
+Adding `occupancy` to rate identity in 3.1b left `AccommodationRateService.select_rate`
+ordering by `effective_from` alone, so as soon as a real sheet's Single and Double rows were
+loaded, several rows shared an `effective_from` and the row returned was whatever the planner
+produced — the same quote could price two ways on two runs. It now breaks the tie on the
+**highest** occupancy: a room selected without a headcount is the room as the hotel sells it,
+and a double is not priced as a single. Occupancy-aware selection for a group lives in
+`OptionPricingService`, not here.

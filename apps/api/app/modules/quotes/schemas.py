@@ -56,6 +56,28 @@ class TransportIn(BaseModel):
     days: int = Field(default=1, ge=1)
 
 
+class QuoteOptionIn(BaseModel):
+    """One property to offer on the quote (§3.7).
+
+    Only the property and the agent's manual money are given. The room type, meal
+    plan and rooming are *resolved* by pricing — the agent picks hotels, the
+    engine picks the cheapest eligible room within each one.
+    """
+
+    accommodation_id: uuid.UUID
+    is_recommended: bool = False
+    sort_order: int = 0
+    # Backend-only, added after profit and never marked up (§3.6).
+    agent_cover_fee: Decimal = Field(default=Decimal("0"), ge=0)
+    # Group fee per meal for bed-and-breakfast options only (§3.4).
+    chef_fee_per_meal: Decimal | None = Field(default=None, ge=0)
+    manual_meal_cost: Decimal | None = Field(default=None, ge=0)
+    # An agent may mark an option non-comparable (a villa against resorts); the
+    # engine can add that flag but never remove it.
+    is_comparable: bool = True
+    notes: str | None = None
+
+
 class QuoteCreate(BaseModel):
     client_id: uuid.UUID
     # Optional — default from the client's residence category / its currency.
@@ -69,6 +91,17 @@ class QuoteCreate(BaseModel):
     travellers: list[TravellerIn] = Field(default_factory=list)
     legs: list[LegIn] = Field(default_factory=list)
     transport: list[TransportIn] = Field(default_factory=list)
+
+    # -- Stage 3 group quoting (design doc §3.3-§3.7) --------------------- #
+    # A 25-person corporate booking is a headcount, not 25 traveller rows.
+    pax_count: int | None = Field(default=None, ge=1)
+    # NULL uses the business defaults from pricing config (profit 24%,
+    # contingency 5%) — never a literal in code.
+    profit_pct: Decimal | None = Field(default=None, ge=0, le=100)
+    contingency_pct: Decimal | None = Field(default=None, ge=0, le=100)
+    # The plan the client asked for; options may fall back from it (§3.4).
+    requested_meal_plan_id: uuid.UUID | None = None
+    options: list[QuoteOptionIn] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _check_dates(self) -> QuoteCreate:
@@ -137,6 +170,26 @@ class TransportRead(BaseModel):
     days: int
 
 
+class QuoteOptionResolvedRead(BaseModel):
+    """An option as stored: the property plus whatever pricing resolved.
+
+    Room type, meal plan and rooming are NULL until the options are priced. No
+    money appears here — the figures live in the pricing result and the version
+    snapshot, so a quote read can never expose cost or margin (§2).
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    accommodation_id: uuid.UUID
+    room_type_id: uuid.UUID | None
+    meal_plan_id: uuid.UUID | None
+    rooms_required: int | None
+    meal_plan_fallback_from: str | None
+    is_comparable: bool
+    is_recommended: bool
+    sort_order: int
+
+
 class QuoteRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: uuid.UUID
@@ -152,9 +205,16 @@ class QuoteRead(BaseModel):
     tax_pct: Decimal | None
     current_version_id: uuid.UUID | None
     created_at: datetime
+    pax_count: int | None
+    profit_pct: Decimal | None
+    contingency_pct: Decimal | None
+    requested_meal_plan_id: uuid.UUID | None
+    valid_until: date | None
     travellers: list[TravellerRead]
     legs: list[LegRead]
     transport: list[TransportRead]
+    options: list[QuoteOptionResolvedRead]
+    rejected_candidates: list[RejectedCandidateRead]
 
 
 class QuoteSummary(BaseModel):
@@ -278,3 +338,92 @@ class QuoteVersionInternalRead(BaseModel):
     gross_margin: Decimal
     created_at: datetime
     items: list[QuoteItemInternal]
+
+
+# --------------------------------------------------------------------------- #
+# Stage 3 option pricing (design doc §2, §3.3-§3.7)
+# --------------------------------------------------------------------------- #
+# The internal/client split is enforced here rather than by filtering in the
+# renderer. A client model that simply has no field for cost, margin, supplier
+# payments or the agent cover fee cannot leak one, however the document template
+# changes later.
+
+
+class OptionBuildUpInternal(BaseModel):
+    """Every step of the margin build-up. Backend only, in full."""
+
+    model_config = ConfigDict(from_attributes=True)
+    cost_subtotal: Decimal
+    contingency_value: Decimal
+    cost_basis: Decimal
+    profit_value: Decimal
+    after_profit: Decimal
+    agent_cover_fee: Decimal
+    selling_total: Decimal
+    per_person: Decimal | None
+    group_total: Decimal
+    components: dict[str, Decimal]
+
+
+class SupplementChargeInternal(BaseModel):
+    """A festive loading or compulsory gala dinner as priced onto one option."""
+
+    model_config = ConfigDict(from_attributes=True)
+    label: str
+    kind: str
+    basis: str
+    amount: Decimal
+    currency: str
+    nights: int
+    cost: Decimal
+
+
+class QuoteOptionClientRead(BaseModel):
+    """What the client is shown for one option: a price, and nothing behind it."""
+
+    model_config = ConfigDict(from_attributes=True)
+    accommodation_id: uuid.UUID
+    accommodation_name: str
+    room_type_name: str
+    meal_plan_code: str
+    rooms_required: int
+    nights: int
+    currency: str
+    # NULL when the group is not uniform, in which case only the total is shown.
+    per_person: Decimal | None = None
+    group_total: Decimal
+    is_comparable: bool
+
+
+class QuoteOptionInternalRead(QuoteOptionClientRead):
+    room_type_id: uuid.UUID
+    meal_plan_id: uuid.UUID
+    # Set when the property had no rate on the plan the client asked for.
+    meal_plan_fallback_from: str | None = None
+    supplier_paid_total: Decimal
+    retained_discount: Decimal
+    supplements: list[SupplementChargeInternal]
+    build_up: OptionBuildUpInternal
+    warnings: list[str]
+
+
+class RejectedCandidateRead(BaseModel):
+    """A property considered but not offered. ``reason`` prints verbatim (§3.3a)."""
+
+    model_config = ConfigDict(from_attributes=True)
+    accommodation_id: uuid.UUID | None = None
+    name: str
+    reason: str
+
+
+class OptionPricingClientResult(BaseModel):
+    options: list[QuoteOptionClientRead]
+    rejected: list[RejectedCandidateRead]
+
+
+class OptionPricingInternalResult(BaseModel):
+    options: list[QuoteOptionInternalRead]
+    rejected: list[RejectedCandidateRead]
+    # Why a property on the quote could not be priced at all. Internal because it
+    # describes gaps in our own rate data, not anything about the hotel.
+    warnings: list[str]

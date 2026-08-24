@@ -9,19 +9,31 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.deps import require_permission
 from app.db.session import get_db
 from app.modules.quotes.models import QuoteVersion
+from app.modules.quotes.option_pricing import (
+    OptionCosting,
+    OptionPricingResult,
+    OptionPricingService,
+)
 from app.modules.quotes.pricing_service import QuotePricingService
 from app.modules.quotes.schemas import (
     CalculateRequest,
+    OptionBuildUpInternal,
+    OptionPricingClientResult,
+    OptionPricingInternalResult,
     PricingLineClient,
     PricingResultClient,
     PricingResultInternal,
     QuoteCreate,
+    QuoteOptionClientRead,
+    QuoteOptionInternalRead,
     QuoteRead,
     QuoteStatusUpdate,
     QuoteSummary,
     QuoteVersionClientRead,
     QuoteVersionInternalRead,
     QuoteVersionSummary,
+    RejectedCandidateRead,
+    SupplementChargeInternal,
 )
 from app.modules.quotes.service import QuoteService
 from app.modules.users.models import User
@@ -125,3 +137,72 @@ async def list_quote_versions(
         .order_by(QuoteVersion.version_number.desc())
     )
     return list((await db.execute(stmt)).scalars().all())
+
+
+# --------------------------------------------------------------------------- #
+# Stage 3 option pricing
+# --------------------------------------------------------------------------- #
+
+
+def _client_option(costing: OptionCosting) -> QuoteOptionClientRead:
+    return QuoteOptionClientRead(
+        accommodation_id=costing.accommodation_id,
+        accommodation_name=costing.accommodation_name,
+        room_type_name=costing.room_type_name,
+        meal_plan_code=costing.meal_plan_code,
+        rooms_required=costing.rooms_required,
+        nights=costing.nights,
+        currency=costing.currency,
+        per_person=costing.build_up.per_person,
+        group_total=costing.build_up.group_total,
+        is_comparable=costing.is_comparable,
+    )
+
+
+def _internal_option(costing: OptionCosting) -> QuoteOptionInternalRead:
+    return QuoteOptionInternalRead(
+        **_client_option(costing).model_dump(),
+        room_type_id=costing.room_type_id,
+        meal_plan_id=costing.meal_plan_id,
+        meal_plan_fallback_from=costing.meal_plan_fallback_from,
+        supplier_paid_total=costing.supplier_paid_total,
+        retained_discount=costing.retained_discount,
+        supplements=[
+            SupplementChargeInternal.model_validate(s) for s in costing.supplements
+        ],
+        build_up=OptionBuildUpInternal.model_validate(costing.build_up),
+        warnings=costing.warnings,
+    )
+
+
+def _option_result(
+    result: OptionPricingResult, *, internal: bool
+) -> OptionPricingInternalResult | OptionPricingClientResult:
+    rejected = [RejectedCandidateRead.model_validate(r) for r in result.rejected]
+    if internal:
+        return OptionPricingInternalResult(
+            options=[_internal_option(o) for o in result.options],
+            rejected=rejected,
+            warnings=result.warnings,
+        )
+    return OptionPricingClientResult(
+        options=[_client_option(o) for o in result.options], rejected=rejected
+    )
+
+
+@router.post("/quotes/{quote_id}/options/price", response_model=None)
+async def price_quote_options(
+    quote_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(require_permission("quote:create")),
+) -> OptionPricingInternalResult | OptionPricingClientResult:
+    """Price every option on a quote (§3.3-§3.7).
+
+    Resolves each property's cheapest eligible room type, the meal plan after the
+    fallback chain, the rooming, the mandatory supplements and the margin
+    build-up, and records any property refused on minimum stay as a missed-out
+    option. Cost, margin and supplier figures are returned only to staff holding
+    ``quote:read_cost``.
+    """
+    result = await OptionPricingService(db).price_options(quote_id)
+    return _option_result(result, internal=_can_read_cost(actor))

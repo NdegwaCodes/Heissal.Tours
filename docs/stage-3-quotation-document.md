@@ -86,9 +86,22 @@ the PDF renderer must use the **client** schema, never the internal one.
   price. So 25 pax in twins is 12 rooms at the double rate plus 1 at the single rate,
   and `occupancy` is part of rate identity, not a rooming detail (see §4).
 - The "odd single charged in full" rule above still holds in the sense that the room is
-  never half-charged; it is charged at the supplier's single-occupancy rate. Where a
-  sheet gives no single rate, `single_supplement` on top of the shared rate is the
-  fallback (3 sheets price it that way).
+  never half-charged; it is charged at the supplier's single-occupancy rate.
+- **Corrected again 2026-08-25, while implementing 3.3.** This section previously said that
+  where a sheet gives no single rate, `single_supplement` on top of the shared rate is the
+  fallback. That is only coherent on a sheet priced **per person sharing**, which is how
+  those 3 sheets are written. Our rates are stored **per room**, so adding a 4,000
+  supplement to a 24,000 double would charge one guest 28,000 for the room two guests pay
+  24,000 for. The engine therefore charges the next larger room **in full** — the other half
+  of the same rule — and raises the stated supplement as a warning for review, because its
+  presence is a hint the sheet may be per-person and was ingested on the wrong basis. Where
+  no room the sheet prices can hold the guests, the room type drops out of the comparison
+  rather than being mispriced.
+- **Rate selection is per night, not per stay.** Season windows do not line up with
+  itineraries: a 18-22 December booking crosses out of high season into festive, and pricing
+  every night at the rate covering the arrival date would undercharge the last two by
+  thousands per room per night. Where two rows overlap a night the later `effective_from`
+  wins, the same tiebreak the Stage 2 lookup uses.
 
 ### 3.3a Minimum stay
 
@@ -112,6 +125,14 @@ Jan : 4 Nights".
   verbatim, so it may only ever contain something safe to show — "requires a minimum
   stay of 4 nights over the festive period", never a cost, margin or supplier-relations
   reason. An internal-only rejection does not belong in this table (§2).
+- **A missing rate is therefore not a rejection** (settled 2026-08-25 in 3.3). Only a rule
+  the client can be shown becomes a `quote_rejected_candidates` row. A property with no rate
+  loaded for those dates, or no room type that can house the group, is an **internal
+  warning** instead: "we have no rates for this property" is a statement about our own data,
+  not about the hotel, and printing it would invent a refusal the supplier never made.
+- Where several room types each fail on a different minimum, the **shortest** minimum is the
+  one quoted back — it is the easiest for the client to meet, so it is the honest one to
+  state.
 
 ### 3.4 Meal plans
 
@@ -126,7 +147,10 @@ Jan : 4 Nights".
   **entered manually per meal for the whole group** — one chef cooks for everyone, so it
   is a group fee, not a per-person one. Never added to a half-board or full-board option.
   The food cost itself is a separate manual entry, with the meal count derived from the
-  stay length and the plan's gap (BB → lunch + dinner).
+  stay length and the plan's gap (BB → lunch + dinner, so 2 per night; room-only → 3).
+  Derived rather than typed, so a four-night bed-and-breakfast option cannot be quoted with
+  three days of food. Half board leaves lunch but never takes a chef, so its gap is
+  deliberately absent rather than set to 1.
 
 ### 3.4a Child pricing
 
@@ -267,6 +291,13 @@ quotes show the total booking price only.
 - **Cheapest within a hotel** — across that hotel's room types for the eligible meal
   plan. The system never picks *between* hotels; the client is shown 3–9 hotels plus
   1–2 BnB options and chooses.
+- Cheapest is decided on the **room rate for the whole stay**, before supplements. The
+  sheets state supplements for the property rather than per room type, so bringing them into
+  the comparison would not change the winner and would cost a supplement lookup per
+  candidate room type.
+- An option priced on a **fallback meal plan is marked not comparable** automatically. An
+  agent may mark an option non-comparable for their own reasons (a villa against full-board
+  resorts); the engine can only add that flag, never remove it.
 - Options that fall back to a different meal plan, or whose structure isn't comparable
   (villa vs full-board resort), are flagged as such.
 - **Rejected candidates are recorded and shown** with a reason — the sample's Diani

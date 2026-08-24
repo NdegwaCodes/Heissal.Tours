@@ -28,6 +28,15 @@ class AccommodationRateService:
 
         If several overlap, the one with the latest `effective_from` wins.
         A miss raises NotFoundError — a price is never assumed.
+
+        This lookup does not take an occupancy, so where a sheet quotes a
+        separate price per occupancy it returns the **highest** one: a room
+        selected without a headcount is the room as the hotel sells it, and a
+        double is not priced as a single. The tiebreak is explicit rather than
+        left to row order — since occupancy joined rate identity, several rows now
+        share an ``effective_from``, and without it the same quote could price two
+        ways on two runs. Occupancy-aware selection for a group lives in
+        :class:`~app.modules.quotes.option_pricing.OptionPricingService`.
         """
         stmt = (
             select(AccommodationRate)
@@ -39,7 +48,10 @@ class AccommodationRateService:
                 AccommodationRate.effective_from <= stay_date,
                 AccommodationRate.effective_to >= stay_date,
             )
-            .order_by(AccommodationRate.effective_from.desc())
+            .order_by(
+                AccommodationRate.effective_from.desc(),
+                AccommodationRate.occupancy.desc(),
+            )
             .limit(1)
         )
         rate = (await self.db.execute(stmt)).scalar_one_or_none()

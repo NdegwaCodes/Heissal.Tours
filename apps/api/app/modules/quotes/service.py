@@ -24,6 +24,7 @@ from app.modules.quotes.models import (
     QuoteActivity,
     QuoteCounter,
     QuoteLeg,
+    QuoteOption,
     QuoteTransport,
     QuoteTraveller,
 )
@@ -102,6 +103,10 @@ class QuoteService:
             markup_pct=payload.markup_pct,
             discount_pct=payload.discount_pct,
             tax_pct=payload.tax_pct,
+            pax_count=payload.pax_count,
+            profit_pct=payload.profit_pct,
+            contingency_pct=payload.contingency_pct,
+            requested_meal_plan_id=payload.requested_meal_plan_id,
             created_by=actor_id,
         )
         for t in payload.travellers:
@@ -136,6 +141,21 @@ class QuoteService:
                     )
                 )
             quote.legs.append(ql)
+        for index, opt in enumerate(payload.options, start=1):
+            quote.options.append(
+                QuoteOption(
+                    accommodation_id=opt.accommodation_id,
+                    is_recommended=opt.is_recommended,
+                    # Ties keep the order the agent listed them in rather than
+                    # falling back to insertion order, which is not stable.
+                    sort_order=opt.sort_order or index,
+                    agent_cover_fee=opt.agent_cover_fee,
+                    chef_fee_per_meal=opt.chef_fee_per_meal,
+                    manual_meal_cost=opt.manual_meal_cost,
+                    is_comparable=opt.is_comparable,
+                    notes=opt.notes,
+                )
+            )
         for tr in payload.transport:
             quote.transport.append(
                 QuoteTransport(

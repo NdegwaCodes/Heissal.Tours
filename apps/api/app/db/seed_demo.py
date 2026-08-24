@@ -44,6 +44,7 @@ from app.db.session import AsyncSessionLocal
 from app.modules.accommodations.models import (
     Accommodation,
     AccommodationRate,
+    AccommodationSupplement,
     MealPlan,
     RoomType,
 )
@@ -57,6 +58,16 @@ from app.modules.vehicles.models import FuelPrice, Vehicle
 # A wide season so any test date inside 2026 resolves.
 SEASON_FROM = date(2026, 1, 1)
 SEASON_TO = date(2026, 12, 31)
+# A festive window laid over the wide season, the shape every real sheet uses:
+# a narrower period with its own rate, its own minimum stay, and a supplement
+# narrower still. It overlaps SEASON_FROM..SEASON_TO deliberately — that overlap
+# is what the per-night "latest effective_from wins" tiebreak is for.
+FESTIVE_FROM = date(2026, 12, 20)
+FESTIVE_TO = date(2027, 1, 2)
+FESTIVE_MIN_NIGHTS = 4
+# Narrower again than the festive season that contains it (§3.5a).
+SUPPLEMENT_FROM = date(2026, 12, 24)
+SUPPLEMENT_TO = date(2026, 12, 25)
 
 DEMO_MARKER = "demo-sample"
 
@@ -118,12 +129,15 @@ async def seed_demo(db: AsyncSession) -> dict[str, Any]:
     # 2. Rack rate carrying a stated 15% discount — half of it reaches the client.
     # 3. Bed & breakfast only — forces the FB -> HB -> BB fallback chain.
     # 4. A 4-guest villa — rooming by capacity rather than twin-sharing.
+    # 5. A festive-only minimum stay — the property that must be refused and
+    #    still shown as a missed-out option (§3.3a).
     properties: dict[str, Accommodation] = {}
     for name, category in (
         ("Coral Sands Resort", "resort"),
         ("Baobab Beach Lodge", "lodge"),
         ("Kaskazi Guest House", "guesthouse"),
         ("Pendo Demo Villas", "villa"),
+        ("Chui Festive Camp", "camp"),
     ):
         properties[name] = await _get_or_create(
             db,
@@ -151,6 +165,7 @@ async def seed_demo(db: AsyncSession) -> dict[str, Any]:
         ("baobab_twin", properties["Baobab Beach Lodge"], "Twin", 2),
         ("kaskazi_twin", properties["Kaskazi Guest House"], "Twin", 2),
         ("villa_two_bed", properties["Pendo Demo Villas"], "Two Bedroom", 4),
+        ("chui_twin", properties["Chui Festive Camp"], "Twin", 2),
     ):
         rooms[key] = await _get_or_create(
             db,
@@ -170,24 +185,38 @@ async def seed_demo(db: AsyncSession) -> dict[str, Any]:
         currency: str = "KES",
         child: str | None = None,
         child_bounds: tuple[int, int] | None = None,
+        occupancy: int = 2,
+        single_supplement: str | None = None,
+        min_nights: int | None = None,
+        season: tuple[str, date, date] = ("standard", SEASON_FROM, SEASON_TO),
     ) -> AccommodationRate:
+        label, starts, ends = season
+        # Occupancy is part of the natural key because it is part of rate
+        # identity (§3.3): without it the Single and Double rows of one sheet
+        # collide and only one of them can be stored.
         return await _get_or_create(
             db,
             AccommodationRate,
             (AccommodationRate.room_type_id == room.id)
             & (AccommodationRate.meal_plan_id == plan.id)
             & (AccommodationRate.residence_category_id == rc.id)
-            & (AccommodationRate.effective_from == SEASON_FROM),
+            & (AccommodationRate.occupancy == occupancy)
+            & (AccommodationRate.effective_from == starts),
             accommodation_id=room.accommodation_id,
             room_type_id=room.id,
             meal_plan_id=plan.id,
             residence_category_id=rc.id,
-            season_name=f"{DEMO_MARKER} standard",
-            effective_from=SEASON_FROM,
-            effective_to=SEASON_TO,
+            season_name=f"{DEMO_MARKER} {label}",
+            effective_from=starts,
+            effective_to=ends,
             currency=currency,
+            occupancy=occupancy,
             rate_per_night=Decimal(amount),
             child_rate=Decimal(child) if child else None,
+            single_supplement=(
+                Decimal(single_supplement) if single_supplement else None
+            ),
+            min_nights=min_nights,
             # Stage 3 provenance: VAT-inclusive by default, rate kind, and the
             # supplier discount left un-applied so pricing halves it later.
             vat_inclusive=True,
@@ -202,14 +231,21 @@ async def seed_demo(db: AsyncSession) -> dict[str, Any]:
     # "cheapest within the hotel" has something to choose between.
     await _rate(rooms["coral_twin"], fb, citizen, "9000", kind="sto")
     await _rate(rooms["coral_superior"], fb, citizen, "12500", kind="sto")
+    # The same twin priced for one guest. A single is neither half a double nor
+    # equal to one — it is its own quoted figure, which is why occupancy is part
+    # of rate identity (§3.3). 25 guests in these twins is therefore
+    # 12 x 9,000 + 1 x 6,500, not 13 x 9,000 and not 12.5 x 9,000.
+    await _rate(rooms["coral_twin"], fb, citizen, "6500", kind="sto", occupancy=1)
     # Non-resident pricing is materially higher — the gap tests §3.6a.
     await _rate(rooms["coral_twin"], fb, non_resident, "180", kind="sto", currency="USD")
 
     # Baobab: rack rate with a stated 15% discount, and a child policy where a
-    # child is 3–11 (over 11 pays adult).
+    # child is 3–11 (over 11 pays adult). No single-occupancy row: the sheet
+    # states a single supplement instead, which is the §3.3 fallback.
     await _rate(
         rooms["baobab_twin"], fb, citizen, "24000",
         kind="rack", discount="15", child="12000", child_bounds=(3, 11),
+        single_supplement="4000",
     )
 
     # Kaskazi: bed & breakfast ONLY — no FB or HB row exists, so a full-board
@@ -218,6 +254,38 @@ async def seed_demo(db: AsyncSession) -> dict[str, Any]:
 
     # Pendo villas: half board on a 4-guest unit.
     await _rate(rooms["villa_two_bed"], hb, citizen, "16000")
+
+    # Chui: bookable most of the year, but the festive window carries its own
+    # rate AND a four-night minimum. A three-night December request must be
+    # refused and still appear on the document as a missed-out option (§3.3a),
+    # while the same three nights in July price normally.
+    await _rate(rooms["chui_twin"], fb, citizen, "14000")
+    await _rate(
+        rooms["chui_twin"], fb, citizen, "22000",
+        min_nights=FESTIVE_MIN_NIGHTS,
+        season=("festive", FESTIVE_FROM, FESTIVE_TO),
+    )
+
+    # --- A compulsory festive supplement (§3.5a) ---------------------------- #
+    # Property-wide (no room type, plan or residence scope) and narrower than the
+    # season around it, so a stay has to be counted night by night against it.
+    await _get_or_create(
+        db,
+        AccommodationSupplement,
+        (AccommodationSupplement.accommodation_id
+         == properties["Coral Sands Resort"].id)
+        & (AccommodationSupplement.label == f"{DEMO_MARKER} Christmas dinner")
+        & (AccommodationSupplement.effective_from == SUPPLEMENT_FROM),
+        accommodation_id=properties["Coral Sands Resort"].id,
+        label=f"{DEMO_MARKER} Christmas dinner",
+        kind="gala",
+        basis="per_person_per_night",
+        amount=Decimal("2500"),
+        currency="KES",
+        effective_from=SUPPLEMENT_FROM,
+        effective_to=SUPPLEMENT_TO,
+        is_mandatory=True,
+    )
 
     # --- Park fees: per day of stay, resident and non-resident -------------- #
     for rc, amount, currency in ((citizen, "1200", "KES"), (non_resident, "70", "USD")):
@@ -377,17 +445,24 @@ async def seed_demo(db: AsyncSession) -> dict[str, Any]:
         "acc_rack_discounted": str(properties["Baobab Beach Lodge"].id),
         "acc_bb_only": str(properties["Kaskazi Guest House"].id),
         "acc_villa": str(properties["Pendo Demo Villas"].id),
+        "acc_min_stay": str(properties["Chui Festive Camp"].id),
         "room_coral_twin": str(rooms["coral_twin"].id),
         "room_coral_superior": str(rooms["coral_superior"].id),
         "room_baobab_twin": str(rooms["baobab_twin"].id),
         "room_kaskazi_twin": str(rooms["kaskazi_twin"].id),
         "room_villa": str(rooms["villa_two_bed"].id),
+        "room_chui_twin": str(rooms["chui_twin"].id),
         "activity_mandatory": str(boat.id),
         "activity_optional": str(quad.id),
         "vehicle_coaster": str(coaster.id),
         "fuel_type": fuel_type,
         "season_from": SEASON_FROM.isoformat(),
         "season_to": SEASON_TO.isoformat(),
+        "festive_from": FESTIVE_FROM.isoformat(),
+        "festive_to": FESTIVE_TO.isoformat(),
+        "festive_min_nights": FESTIVE_MIN_NIGHTS,
+        "supplement_from": SUPPLEMENT_FROM.isoformat(),
+        "supplement_to": SUPPLEMENT_TO.isoformat(),
     }
 
 
