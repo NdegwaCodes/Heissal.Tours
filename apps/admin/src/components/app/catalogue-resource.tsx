@@ -1,6 +1,7 @@
 "use client";
 
-// Generic catalogue screen (Stage 2.9): list + create for any CatalogueSpec.
+// Generic catalogue screen (Stage 2.9): list + create for any CatalogueSpec,
+// including resources nested under a parent (accommodations/{id}/rates).
 // Permission-aware — the create form only renders with the spec's manage
 // permission, and the server enforces it regardless (this is the UI mirror).
 
@@ -16,6 +17,22 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
+
+const SELECT_CLASS =
+  "h-9 w-full rounded-md border border-neutral-200 bg-white px-3 text-sm " +
+  "focus:border-brand focus:outline-none disabled:bg-neutral-50";
+
+function aOrAn(word: string): string {
+  return /^[aeiou]/.test(word) ? `an ${word}` : `a ${word}`;
+}
+
+/** Where a lookup field loads its options from — under the parent when asked. */
+function lookupPathFor(spec: CatalogueSpec, field: FieldSpec, parentId: string): string {
+  if (field.lookupUnderParent && spec.parent) {
+    return `${spec.parent.collection}/${parentId}/${field.lookup}`;
+  }
+  return field.lookup ?? "";
+}
 
 /** Initial form state from the spec's declared defaults. */
 function initialValues(spec: CatalogueSpec): Record<string, string | boolean> {
@@ -52,15 +69,25 @@ function toPayload(
 export function CatalogueResource({ spec }: { spec: CatalogueSpec }) {
   const { data: me } = useMe();
   const [showCreate, setShowCreate] = useState(false);
+  const [parentId, setParentId] = useState("");
   const qc = useQueryClient();
 
+  // A parent-scoped resource (rates, fees) lives at parent/{id}/segment and
+  // cannot be listed until a parent is chosen.
+  const collectionPath = spec.parent
+    ? `${spec.parent.collection}/${parentId}/${spec.parent.segment}`
+    : spec.path;
+  const ready = !spec.parent || parentId !== "";
+
   const rowsQ = useQuery<CatalogueRow[]>({
-    queryKey: [spec.path],
-    queryFn: () => api.get(spec.path),
+    queryKey: [collectionPath],
+    queryFn: () => api.get(collectionPath),
+    enabled: ready,
   });
 
   const canManage = me ? hasPermission(me, spec.managePermission) : false;
   const tableFields = spec.fields.filter((f) => f.inTable !== false);
+  const rows = rowsQ.data ?? [];
 
   return (
     <div className="space-y-6">
@@ -69,26 +96,51 @@ export function CatalogueResource({ spec }: { spec: CatalogueSpec }) {
           <h1 className="text-xl font-semibold text-neutral-900">{spec.title}</h1>
           <p className="text-sm text-neutral-500">{spec.subtitle}</p>
         </div>
-        {canManage && (
+        {canManage && ready && (
           <Button onClick={() => setShowCreate((v) => !v)}>
             {showCreate ? "Close" : `New ${spec.singular}`}
           </Button>
         )}
       </div>
 
-      {showCreate && canManage && (
+      {spec.parent && (
+        <Card>
+          <CardContent className="max-w-md p-5">
+            <div className="space-y-1.5">
+              <Label>{spec.parent.label}</Label>
+              <OptionSelect
+                path={spec.parent.collection}
+                placeholder={`Select ${spec.parent.label.toLowerCase()}`}
+                value={parentId}
+                onChange={(id) => {
+                  setParentId(id);
+                  setShowCreate(false);
+                }}
+              />
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {showCreate && canManage && ready && (
         <CreateCard
           spec={spec}
+          collectionPath={collectionPath}
+          parentId={parentId}
           onDone={() => {
             setShowCreate(false);
-            qc.invalidateQueries({ queryKey: [spec.path] });
+            qc.invalidateQueries({ queryKey: [collectionPath] });
           }}
         />
       )}
 
       <Card>
         <CardContent className="p-0">
-          {rowsQ.isLoading ? (
+          {!ready ? (
+            <p className="p-5 text-sm text-neutral-500">
+              Pick {aOrAn(spec.parent!.label.toLowerCase())} to see its {spec.title.toLowerCase()}.
+            </p>
+          ) : rowsQ.isLoading ? (
             <p className="p-5 text-sm text-neutral-500">Loading {spec.title.toLowerCase()}…</p>
           ) : rowsQ.isError ? (
             <p className="p-5 text-sm text-red-600">
@@ -96,7 +148,7 @@ export function CatalogueResource({ spec }: { spec: CatalogueSpec }) {
                 ? `You do not have permission to view ${spec.title.toLowerCase()}.`
                 : `Failed to load ${spec.title.toLowerCase()}.`}
             </p>
-          ) : (rowsQ.data ?? []).length === 0 ? (
+          ) : rows.length === 0 ? (
             <p className="p-5 text-sm text-neutral-500">
               No {spec.title.toLowerCase()} yet
               {canManage ? ` — create the first ${spec.singular}.` : "."}
@@ -111,11 +163,15 @@ export function CatalogueResource({ spec }: { spec: CatalogueSpec }) {
                 </TR>
               </THead>
               <TBody>
-                {(rowsQ.data ?? []).map((row) => (
+                {rows.map((row) => (
                   <TR key={row.id}>
                     {tableFields.map((f) => (
                       <TD key={f.name} className={f.name === "name" ? "font-medium" : undefined}>
-                        <Cell field={f} row={row} />
+                        <Cell
+                          field={f}
+                          row={row}
+                          lookupPath={lookupPathFor(spec, f, parentId)}
+                        />
                       </TD>
                     ))}
                   </TR>
@@ -130,7 +186,15 @@ export function CatalogueResource({ spec }: { spec: CatalogueSpec }) {
 }
 
 /** One table cell: booleans as state text, lookups resolved to a name. */
-function Cell({ field, row }: { field: FieldSpec; row: CatalogueRow }) {
+function Cell({
+  field,
+  row,
+  lookupPath,
+}: {
+  field: FieldSpec;
+  row: CatalogueRow;
+  lookupPath: string;
+}) {
   const value = row[field.name];
 
   if (field.type === "boolean") {
@@ -140,8 +204,8 @@ function Cell({ field, row }: { field: FieldSpec; row: CatalogueRow }) {
       <span className="text-neutral-400">No</span>
     );
   }
-  if (field.type === "lookup" && field.lookup) {
-    return <LookupName collection={field.lookup} id={value as string | null} />;
+  if (field.type === "lookup") {
+    return <LookupName path={lookupPath} id={(value as string | null) ?? null} />;
   }
   if (field.type === "select") {
     return value ? <Badge>{String(value)}</Badge> : <span className="text-neutral-400">—</span>;
@@ -153,23 +217,68 @@ function Cell({ field, row }: { field: FieldSpec; row: CatalogueRow }) {
 }
 
 /** Resolve a foreign id to its name. Cached per collection by react-query. */
-function LookupName({ collection, id }: { collection: string; id: string | null }) {
+function LookupName({ path, id }: { path: string; id: string | null }) {
   const q = useQuery<CatalogueRow[]>({
-    queryKey: [collection],
-    queryFn: () => api.get(collection),
+    queryKey: [path],
+    queryFn: () => api.get(path),
+    enabled: Boolean(path),
   });
   if (!id) return <span className="text-neutral-400">—</span>;
   const match = (q.data ?? []).find((r) => r.id === id);
   return <>{match?.name ?? "…"}</>;
 }
 
-function CreateCard({ spec, onDone }: { spec: CatalogueSpec; onDone: () => void }) {
+/** A <select> over any collection of {id, name} rows. */
+function OptionSelect({
+  path,
+  placeholder,
+  value,
+  onChange,
+}: {
+  path: string;
+  placeholder: string;
+  value: string;
+  onChange: (id: string) => void;
+}) {
+  const q = useQuery<CatalogueRow[]>({
+    queryKey: [path],
+    queryFn: () => api.get(path),
+    enabled: Boolean(path),
+  });
+  return (
+    <select
+      className={SELECT_CLASS}
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      disabled={!path || q.isLoading}
+    >
+      <option value="">{q.isLoading ? "Loading…" : placeholder}</option>
+      {(q.data ?? []).map((r) => (
+        <option key={r.id} value={r.id}>
+          {r.name}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+function CreateCard({
+  spec,
+  collectionPath,
+  parentId,
+  onDone,
+}: {
+  spec: CatalogueSpec;
+  collectionPath: string;
+  parentId: string;
+  onDone: () => void;
+}) {
   const [values, setValues] = useState(() => initialValues(spec));
   const [error, setError] = useState<string | null>(null);
   const formFields = useMemo(() => spec.fields.filter((f) => f.inForm !== false), [spec]);
 
   const create = useMutation({
-    mutationFn: () => api.post(spec.path, toPayload(spec, values)),
+    mutationFn: () => api.post(collectionPath, toPayload(spec, values)),
     onSuccess: onDone,
     onError: (e) =>
       setError(e instanceof ApiError ? e.message : `Failed to create ${spec.singular}.`),
@@ -195,7 +304,12 @@ function CreateCard({ spec, onDone }: { spec: CatalogueSpec; onDone: () => void 
                 {f.label}
                 {f.required && <span className="ml-0.5 text-red-500">*</span>}
               </Label>
-              <FieldInput field={f} value={values[f.name]} onChange={(v) => set(f.name, v)} />
+              <FieldInput
+                field={f}
+                value={values[f.name]}
+                lookupPath={lookupPathFor(spec, f, parentId)}
+                onChange={(v) => set(f.name, v)}
+              />
             </div>
           ))}
         </div>
@@ -218,16 +332,14 @@ function CreateCard({ spec, onDone }: { spec: CatalogueSpec; onDone: () => void 
 function FieldInput({
   field,
   value,
+  lookupPath,
   onChange,
 }: {
   field: FieldSpec;
   value: string | boolean | undefined;
+  lookupPath: string;
   onChange: (v: string | boolean) => void;
 }) {
-  const selectClass =
-    "h-9 w-full rounded-md border border-neutral-200 bg-white px-3 text-sm " +
-    "focus:border-brand focus:outline-none";
-
   if (field.type === "boolean") {
     return (
       <label className="flex h-9 items-center gap-2 text-sm text-neutral-600">
@@ -245,7 +357,7 @@ function FieldInput({
   if (field.type === "select") {
     return (
       <select
-        className={selectClass}
+        className={SELECT_CLASS}
         value={String(value ?? "")}
         onChange={(e) => onChange(e.target.value)}
       >
@@ -258,8 +370,15 @@ function FieldInput({
     );
   }
 
-  if (field.type === "lookup" && field.lookup) {
-    return <LookupSelect collection={field.lookup} field={field} value={value} onChange={onChange} />;
+  if (field.type === "lookup") {
+    return (
+      <OptionSelect
+        path={lookupPath}
+        placeholder={`Select ${field.label.toLowerCase()}`}
+        value={String(value ?? "")}
+        onChange={onChange}
+      />
+    );
   }
 
   return (
@@ -268,45 +387,9 @@ function FieldInput({
       placeholder={field.placeholder}
       // Decimals use text, not number: the value is sent as a string so it
       // reaches the API as an exact decimal rather than a float.
-      type={field.type === "number" ? "number" : "text"}
+      type={field.type === "number" ? "number" : field.type === "date" ? "date" : "text"}
       inputMode={field.type === "decimal" ? "decimal" : undefined}
       onChange={(e) => onChange(e.target.value)}
     />
-  );
-}
-
-function LookupSelect({
-  collection,
-  field,
-  value,
-  onChange,
-}: {
-  collection: string;
-  field: FieldSpec;
-  value: string | boolean | undefined;
-  onChange: (v: string) => void;
-}) {
-  const q = useQuery<CatalogueRow[]>({
-    queryKey: [collection],
-    queryFn: () => api.get(collection),
-  });
-  const selectClass =
-    "h-9 w-full rounded-md border border-neutral-200 bg-white px-3 text-sm " +
-    "focus:border-brand focus:outline-none";
-
-  return (
-    <select
-      className={selectClass}
-      value={String(value ?? "")}
-      onChange={(e) => onChange(e.target.value)}
-      disabled={q.isLoading}
-    >
-      <option value="">{q.isLoading ? "Loading…" : `Select ${field.label.toLowerCase()}`}</option>
-      {(q.data ?? []).map((r) => (
-        <option key={r.id} value={r.id}>
-          {r.name}
-        </option>
-      ))}
-    </select>
   );
 }

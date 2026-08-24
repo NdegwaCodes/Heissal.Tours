@@ -25,7 +25,7 @@ Legend: ☐ not started · ◑ in progress · ☑ done & verified
 
 Design doc: `docs/stage-1-foundation.md`. Acceptance criteria + milestones (1.1–1.8) defined there.
 
-## Stage 2 — Quote Engine  ◑ (2.1–2.8 done & pushed; 2.9 in progress)
+## Stage 2 — Quote Engine  ☑ (2.1–2.9 done; engine priced, tested and editable from the admin)
 Design doc: `docs/stage-2-quote-engine.md` (pricing model, ERD, engine algorithm). Build order per §9.
 
 - ☑ 2.1 Reference data — residence categories, currencies + FX, suppliers, destinations
@@ -36,11 +36,13 @@ Design doc: `docs/stage-2-quote-engine.md` (pricing model, ERD, engine algorithm
 - ☑ 2.6 Pricing config (markup/discount/tax) in `app_settings` + ExchangeRate service
 - ☑ 2.7 Clients + quote domain (quotes, versions, travellers, legs, selections)
 - ☑ 2.8 PricingEngine + `POST /quotes/calculate` + immutable persistence/versioning
-- ◑ 2.9 Correctness/edge/invariant tests + admin catalogue UI
-  - ☑ pure invariant suite (`tests/test_pricing_invariants.py`) — breakdown identities, Decimal-not-float, discount clamping, approval threshold, age boundaries
-  - ☑ engine edge suite (`tests/test_engine_edges.py`) — version immutability under rate drift, overlap tie-break, cost-leak sweep, FX line-for-line scaling *(written; awaiting a test DB run)*
+- ☑ 2.9 Correctness/edge/invariant tests + admin catalogue UI
+  - ☑ pure invariant suite (`tests/test_pricing_invariants.py`) — 778 cases, no DB, 1.4s: breakdown identities, Decimal-not-float, discount clamping, approval threshold, age boundaries
+  - ☑ engine edge suite (`tests/test_engine_edges.py`) — 10/10 green (2026-08-24): version immutability under rate drift, deterministic re-pricing, overlap tie-break, cost-leak sweep across every endpoint, age boundaries, empty quote, unknown-vehicle 404, FX line-for-line scaling
   - ☑ admin catalogue UI — destinations, accommodations, activities, vehicles (spec-driven `CatalogueResource`)
-  - ☐ rates/fees editing UI (seasonal rates, park fees, activity rates, fuel prices)
+  - ☑ rates/fees editing UI — seasonal rates, park fees, activity rates, fuel prices (parent-scoped resources)
+
+**Testing note:** DB tests run against a throwaway Neon DB (`HeissalTours_test`, created → migrated → seeded → dropped). Neon `ap-southeast-2` latency makes them slow — ~100s per test, 17 min for the 10-test edge file — so background them. Override `DATABASE_URL` by **env var**, never by editing a `.env`, and never run them against `HeissalTours`.
 
 Dev tooling: `scripts/verify.sh` (lint + type + test); `scripts/scaffold_module.py` (CRUD modules from a JSON spec); `src/lib/catalogue.ts` is the frontend equivalent.
 

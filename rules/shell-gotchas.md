@@ -32,6 +32,29 @@ main repo (usually a stale branch) and has already operated on the wrong repo on
   command, so the health/refresh-rotation tests fail here. Infra-only, not a code defect —
   they pass on Redis 6+ (CI uses redis:7).
 
+## Pointing tests at a database — override by env var only
+
+`Settings.model_config.env_file` reads BOTH the repo-root `.env` and `apps/api/.env`, and
+pydantic-settings gives the **later** entry priority. Writing an `apps/api/.env` to redirect a
+test run is therefore not reliable across a reordering of that tuple — and when the order was
+`(".env", "../../.env")` the root file silently won, which pointed a "test" migrate+seed at the
+hosted production DB. Always override with a real environment variable (`DATABASE_URL=...`),
+which beats every dotenv file, and assert the resolved URI before running anything:
+
+```bash
+python -c "from app.core.config import settings; assert 'HeissalTours_test' in settings.sqlalchemy_sync_uri"
+```
+
+Neon specifics: `CREATE DATABASE` / `DROP DATABASE` must go to the **direct** endpoint (strip
+`-pooler` from the host) because PgBouncer refuses them, and psycopg2 needs autocommit for both.
+
+## pytest looks hung when it is only slow
+
+Redirected stdout is block-buffered, so a piped `pytest` writes nothing until it exits — a
+20-minute run looks identical to a hang. Set `PYTHONUNBUFFERED=1` to watch progress, and size
+expectations against the DB: a Neon-backed API test costs **~100 seconds** (≈15 HTTP round trips
+to `ap-southeast-2`), so the 10-test edge file takes ~17 minutes. Background these runs.
+
 ## Alembic
 
 `--autogenerate` silently drops some constructs (notably inline `use_alter` for circular

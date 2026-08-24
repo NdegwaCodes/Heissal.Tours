@@ -15,7 +15,12 @@ from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=(".env", "../../.env"),
+        # pydantic-settings gives LATER files priority, so the repo-root .env is
+        # the shared fallback and the app-local apps/api/.env wins over it. The
+        # reverse order silently ignored a local override — which pointed a test
+        # run at the hosted production DB. Real environment variables still beat
+        # both, which is how CI and the throwaway-test DB override this.
+        env_file=("../../.env", ".env"),
         env_file_encoding="utf-8",
         case_sensitive=True,
         extra="ignore",
