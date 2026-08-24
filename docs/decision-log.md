@@ -374,3 +374,50 @@ then looks it up started failing the day the suite crossed 200 clients. Listings
 newest-first on `created_at`, falling back to the UUIDv7 primary key, which is time-ordered
 and sorts the same way. The fix is in the shared base class, so it applies to every reference
 and catalogue endpoint at once rather than to the one that happened to break.
+
+**The document renders only from an issued version** (Stage 3.5, 2026-08-25)
+There is deliberately no endpoint that renders an unissued quote. The version *is* the
+document: rendering live rates would produce a proposal whose figures move between reloads,
+which is the exact failure immutable versions exist to prevent. Passing a version number
+renders an earlier one as the client received it. The single exception is imagery, read live —
+a photograph is presentation, not terms, and freezing image ids would leave an old document
+unable to show a picture that had merely been re-cropped.
+
+**The view model is the internal/client boundary, tested against the rendered bytes**
+(Stage 3.5, 2026-08-25)
+`QuotationView` has no field for cost, margin, supplier payments, contingency, profit or the
+agent cover fee, so no template edit can print one. The two-schema split is the mechanism, but
+the test asserts against the *rendered page*: the quote it uses carries a discounted rack rate
+on purpose, so every internal figure it produces is a different number from the client's, and
+any one of them appearing shows up as a failure.
+
+**A font stack is charset-validated, not HTML-escaped** (Stage 3.5, 2026-08-25)
+Autoescaping turned a quoted font name into `&#39;...&#39;` inside the stylesheet — invalid
+CSS that silently drops the face, which is the sort of failure nobody notices until a client
+comments on the typography. Escaping cannot be the answer, so the two font values are
+restricted to a font-stack charset (no braces, semicolons, angle brackets, parentheses,
+slashes or at-signs) and emitted unescaped. A test asserts every `font-family` in the rendered
+document resolves through one of the two custom properties, so the eventual swap to the real
+brand faces stays a two-line change.
+
+**Standing copy is configuration** (Stage 3.5, 2026-08-25)
+The wordmark, contact details, "why us" list, availability notice, closing disclaimer, VAT
+note, tagline and page size live in `app_settings["document"]`, not in template literals. A
+hard-coded phone number on a client-facing document is a support ticket waiting to happen, and
+the notices are commercial language sales and finance will want to reword without a deploy.
+
+**A section with no data is omitted, not filled** (Stage 3.5, 2026-08-25)
+The transport page needs transport segments; the signature-experience page needs an activity
+flagged for its own section. Rendering them from assumptions would put a description of
+transfers the client is not getting onto a priced proposal, which is worse than saying nothing.
+The same instinct drove a layout fix found by looking at the printed pages: cell borders moved
+from the grid container onto the cells, so five facts in a three-column grid stop after five
+rather than drawing an empty sixth box that reads as a missing value.
+
+**Image cropping is CSS, not a stored derivative** (Stage 3.5, 2026-08-25)
+The design calls for images centre-cropped to the template's aspect ratios. A fixed aspect box
+with `object-fit: cover` *is* a centre crop and renders identically in print, so originals are
+kept and cropping stays a presentation concern. Storing pre-cropped copies would mean
+re-deriving every image whenever a layout changed, for a result the renderer produces free. A
+stored derivative earns its place only when one image needs a crop of its own — a subject
+off-centre — which is a different problem.

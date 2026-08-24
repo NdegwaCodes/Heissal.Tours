@@ -437,6 +437,48 @@ new table.
 - Images: as-is, **auto-cropped centrally** to the template's aspect ratios. 5–6 per
   property.
 
+### 3.11a What 3.5 built, and the rules it settled
+
+- **The document renders from the frozen version, never from live figures.** There is
+  deliberately no way to render an unissued quote: the version *is* the document, and
+  rendering live rates would produce a proposal whose numbers move between reloads.
+  `GET /quotes/{id}/document.html?version=N` renders an earlier one exactly as the client
+  received it.
+- **Imagery is the one thing read live.** Photographs are presentation, not terms —
+  replacing a dark photo of a hotel does not change what was quoted — and freezing image
+  ids would leave an old document unable to show a re-cropped picture.
+- **The view model is the boundary.** `QuotationView` has no field for cost, margin,
+  supplier payments, contingency, profit or the agent cover fee, so no template edit can
+  leak one. This is asserted against the *rendered bytes*, not against a schema.
+- **Standing copy is configuration, not template literals.** The wordmark, contact
+  details, "why us" list, availability notice, closing disclaimer, VAT note, tagline and
+  page size live in `app_settings["document"]`. A hard-coded phone number on a
+  client-facing document is a support ticket waiting to happen.
+- **Type is reached through exactly two CSS custom properties.** A test asserts every
+  `font-family` in the rendered page resolves through `var(--font-display)` or
+  `var(--font-body)`, so the eventual swap to the real faces stays a two-line change
+  rather than a hunt. Those two values are the only strings emitted into the stylesheet
+  unescaped — HTML-escaping the quotes in a font name yields invalid CSS and silently
+  drops the face — so they are charset-validated instead.
+- **A section whose data is missing is omitted, not filled.** The transport page needs
+  transport segments; the signature-experience page needs an activity flagged for its own
+  section. A proposal describing transfers the client is not getting is worse than one
+  that stays quiet about them.
+- **Cropping is CSS, not a stored derivative.** A fixed aspect box with
+  `object-fit: cover` *is* a centre crop and renders identically in print. Pre-cropped
+  copies would need re-deriving on every layout change for a result the renderer gives
+  free. A stored derivative earns its place only when an image needs a crop of its own.
+- **The comparison table sorts cheapest first** while the option pages keep the agent's
+  order — which is what the reference proposal does. The pages lead with the
+  recommendation; the table lets a client scan on cost.
+- **Paper is A4 by default.** The reference proposal was laid out on US Letter, but this
+  document is printed in Kenya. It is config, since it is a property of the printer rather
+  than of the design.
+- **Known gap for 3.6:** image URLs are authenticated API paths, so an offline PDF
+  renderer cannot fetch them. PDF generation has to inline the bytes as data URIs (or
+  render through an authenticated context) or the photographs will be missing from the
+  file.
+
 ## 4. Data model changes
 
 New tables:

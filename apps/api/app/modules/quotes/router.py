@@ -33,6 +33,7 @@ from app.modules.quotes.schemas import (
     QuoteRead,
     QuoteStatusUpdate,
     QuoteSummary,
+    QuoteUpdate,
     QuoteVersionClientRead,
     QuoteVersionInternalRead,
     QuoteVersionSummary,
@@ -94,6 +95,19 @@ async def get_quote(
     _=Depends(require_permission("quote:read")),
 ):
     return await QuoteService(db).get_quote(quote_id)
+
+
+@router.patch("/quotes/{quote_id}", response_model=QuoteRead)
+async def update_quote(
+    quote_id: uuid.UUID,
+    body: QuoteUpdate,
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_permission("quote:create")),
+):
+    """Edit the quote's own fields — currently the document's cover copy (§3.11)."""
+    return await QuoteService(db).update_quote(
+        quote_id, body.model_dump(exclude_unset=True)
+    )
 
 
 @router.patch("/quotes/{quote_id}/status", response_model=QuoteRead)
@@ -172,6 +186,7 @@ def _internal_option(costing: OptionCosting) -> QuoteOptionInternalRead:
         **_client_option(costing).model_dump(),
         room_type_id=costing.room_type_id,
         meal_plan_id=costing.meal_plan_id,
+        meal_plan_name=costing.meal_plan_name,
         meal_plan_fallback_from=costing.meal_plan_fallback_from,
         supplier_paid_total=costing.supplier_paid_total,
         retained_discount=costing.retained_discount,

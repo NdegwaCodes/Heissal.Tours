@@ -105,6 +105,9 @@ class OptionCosting:
     room_type_name: str
     meal_plan_id: uuid.UUID
     meal_plan_code: str
+    # The human label ("Full Board"), carried alongside the code so the
+    # document prints what a client reads rather than a two-letter code.
+    meal_plan_name: str
     meal_plan_fallback_from: str | None
     rooms_required: int
     nights: int
@@ -372,6 +375,7 @@ class OptionPricingService:
                 room_type_name=best.room_type_name,
                 meal_plan_id=plan.id,
                 meal_plan_code=plan_code,
+                meal_plan_name=plan.name,
                 meal_plan_fallback_from=requested_plan if is_fallback else None,
                 rooms_required=best.rooms,
                 nights=len(nights),

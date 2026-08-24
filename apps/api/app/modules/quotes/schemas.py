@@ -102,12 +102,23 @@ class QuoteCreate(BaseModel):
     # The plan the client asked for; options may fall back from it (§3.4).
     requested_meal_plan_id: uuid.UUID | None = None
     options: list[QuoteOptionIn] = Field(default_factory=list)
+    # The document's cover copy (§3.11). NULL falls back to a title derived from
+    # the destination, so a quote is never blank-covered.
+    document_title: str | None = Field(default=None, max_length=160)
+    document_subtitle: str | None = Field(default=None, max_length=240)
 
     @model_validator(mode="after")
     def _check_dates(self) -> QuoteCreate:
         if self.departure_date <= self.arrival_date:
             raise ValueError("departure_date must be after arrival_date")
         return self
+
+
+class QuoteUpdate(BaseModel):
+    """Partial edit of a quote's own fields. Only what is sent is changed."""
+
+    document_title: str | None = Field(default=None, max_length=160)
+    document_subtitle: str | None = Field(default=None, max_length=240)
 
 
 class QuoteStatusUpdate(BaseModel):
@@ -403,6 +414,7 @@ class QuoteOptionClientRead(BaseModel):
 class QuoteOptionInternalRead(QuoteOptionClientRead):
     room_type_id: uuid.UUID
     meal_plan_id: uuid.UUID
+    meal_plan_name: str
     # Set when the property had no rate on the plan the client asked for.
     meal_plan_fallback_from: str | None = None
     supplier_paid_total: Decimal

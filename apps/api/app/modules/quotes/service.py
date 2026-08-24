@@ -107,6 +107,8 @@ class QuoteService:
             profit_pct=payload.profit_pct,
             contingency_pct=payload.contingency_pct,
             requested_meal_plan_id=payload.requested_meal_plan_id,
+            document_title=payload.document_title,
+            document_subtitle=payload.document_subtitle,
             created_by=actor_id,
         )
         for t in payload.travellers:
@@ -177,6 +179,15 @@ class QuoteService:
             ) from exc
 
         return await self._load(quote.id)
+
+    async def update_quote(self, quote_id: uuid.UUID, patch: dict) -> Quote:
+        quote = await self.db.get(Quote, quote_id)
+        if quote is None:
+            raise NotFoundError("Quote not found.")
+        for name, value in patch.items():
+            setattr(quote, name, value)
+        await self.db.commit()
+        return await self._load(quote_id)
 
     async def set_status(self, quote_id: uuid.UUID, status: str) -> Quote:
         quote = await self.db.get(Quote, quote_id)

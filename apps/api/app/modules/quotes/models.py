@@ -105,6 +105,12 @@ class Quote(UUIDPKMixin, TimestampMixin, Base):
     # Printed on the document; 30 days from issue by default. Past it an option
     # is re-priced rather than honoured, since supplier rates move.
     valid_until: Mapped[date | None] = mapped_column(Date, nullable=True)
+    # The cover copy. Per quote rather than per destination because it describes
+    # the trip, not the place: the reference proposal opens on "Corporate Coastal
+    # Retreat", which every Diani quote would not share. NULL falls back to a
+    # title derived from the destination, so a quote is never blank-covered.
+    document_title: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    document_subtitle: Mapped[str | None] = mapped_column(String(240), nullable=True)
     # Which option the client actually chose — the highest-value field for CRM
     # analysis (does the Recommended flag match real behaviour?). Circular FK
     # against quote_options, so use_alter breaks the DDL cycle exactly as

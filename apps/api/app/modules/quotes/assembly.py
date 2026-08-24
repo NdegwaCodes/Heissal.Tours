@@ -375,6 +375,11 @@ class QuoteAssemblyService:
         cfg = await PricingConfigService(self.db).get()
         priced = await OptionPricingService(self.db).price_options(quote_id)
         quote = await self._load(quote_id)
+        # The session does not expire on commit, so the collections pricing just
+        # rewrote are still the pre-pricing ones in the identity map. Without
+        # this the snapshot would record the refusals as they were *before* the
+        # engine derived them — that is, none at all.
+        await self.db.refresh(quote, ["options", "rejected_candidates"])
 
         readiness = self._grade(quote, priced, cfg)
         blocking = [p for p in readiness.problems if p.severity == BLOCKING]
@@ -413,7 +418,7 @@ class QuoteAssemblyService:
                     option_id=option.id,
                     accommodation_id=costing.accommodation_id,
                     accommodation_name=costing.accommodation_name,
-                    meal_plan_label=costing.meal_plan_code,
+                    meal_plan_label=costing.meal_plan_name,
                     rooms_required=costing.rooms_required,
                     cost_subtotal=costing.build_up.cost_subtotal,
                     contingency_value=costing.build_up.contingency_value,
@@ -537,6 +542,10 @@ def _snapshot(
     Denormalised on purpose: a property renamed or a rate superseded must not
     change what this version says was quoted.
     """
+    recommended = {
+        o.accommodation_id: o.is_recommended for o in quote.options
+    }
+    order = {o.accommodation_id: o.sort_order for o in quote.options}
     return {
         "quote_number": quote.quote_number,
         "currency": quote.presentation_currency.upper(),
@@ -549,10 +558,15 @@ def _snapshot(
                 "accommodation_name": o.accommodation_name,
                 "room_type_name": o.room_type_name,
                 "meal_plan_code": o.meal_plan_code,
+                "meal_plan_name": o.meal_plan_name,
                 "meal_plan_fallback_from": o.meal_plan_fallback_from,
                 "rooms_required": o.rooms_required,
                 "nights": o.nights,
                 "is_comparable": o.is_comparable,
+                # Frozen so the document leads on the option that was actually
+                # recommended when it went out, not on whatever is flagged today.
+                "is_recommended": recommended.get(o.accommodation_id, False),
+                "sort_order": order.get(o.accommodation_id, 0),
                 "components": {k: str(v) for k, v in o.components.items()},
                 "supplements": [
                     {

@@ -50,6 +50,8 @@ PERMISSIONS: dict[str, str] = {
     "supplier_doc:read": "View uploaded supplier rate sheets and their proposed rows",
     "supplier_doc:manage": "Upload supplier rate sheets and run extraction",
     "supplier_doc:confirm": "Confirm extracted rows into stored rates",
+    "media:read": "View property and destination imagery",
+    "media:manage": "Upload and remove property and destination imagery",
     "pricing:read": "View pricing configuration (markup/discount/tax defaults)",
     "pricing:manage": "Manage pricing configuration (markup/discount/tax defaults)",
     # --- Stage 2.7: clients + quote domain ---
@@ -78,6 +80,7 @@ _REFERENCE_READ = [
     "activity:read",
     "vehicle:read",
     "pricing:read",
+    "media:read",
 ]
 
 # --- System roles and their initial permissions ---
@@ -98,6 +101,7 @@ ROLE_DEFINITIONS: dict[str, RoleDefinition] = {
             *_REFERENCE_READ,
             "client:read",
             "client:manage",
+            "media:manage",
             "quote:create",
             "quote:read",
             "quote:issue",
