@@ -1,6 +1,6 @@
 # Heissal Tours & Travel — Build Roadmap
 
-**Owner:** IAN
+**Owner:** Heissal
 **Sequence approved by the client. Build strictly in this order — core engine first, public website late.**
 **Persistence:** GitHub repo — slug `heissal-tours-and-travel-platform`, display name "Heissal Tours & Travel Platform" (pending creation). Cloud sessions are ephemeral; the repo + this project are the durable record.
 
@@ -8,26 +8,43 @@ Legend: ☐ not started · ◑ in progress · ☑ done & verified
 
 ---
 
-## Stage 1 — Foundation  ◑ (design ☑ signed off; repo connected; building)
+## Stage 1 — Foundation  ◑ (everything built & verified; only Docker bring-up left)
 
-**Repo:** `https://github.com/NdegwaCodes/Heissal.Tours` · working branch `feature/stage-1-foundation`.
+**Repo:** `https://github.com/NdegwaCodes/Heissal.Tours` · working branch `feature/stage-1-foundation` (backs PR #1); each milestone is also fast-forwarded onto the default branch `master-heissal`.
 **Decision:** fresh start — original tours-marketplace backend archived read-only under `legacy/` (pushed 2026-08-13).
-**Push mechanism:** session git proxy only allows pushes to repos added to the session's *authorized sources*. Personal access tokens are NOT the mechanism (proxy injects its own credential; persistent proxy-bypass is blocked by the security classifier). ACTION NEEDED: user adds `NdegwaCodes/Heissal.Tours` to the session's sources in the Claude desktop app; then plain `git push` works. Until then, deliver progress as zip backups.
+**Push:** plain `git push` from the local workspace works. (The old "session git proxy blocks pushes" note applied only to the ephemeral cloud sandbox and no longer constrains anything.)
 
-- ☐ Monorepo
-- ☐ Docker
-- ☐ PostgreSQL
-- ☐ FastAPI
-- ☐ Next.js
-- ☐ Authentication / RBAC
-- ☐ Database migrations
-- ☐ Admin shell
+- ☑ Monorepo (pnpm/turbo + uv, shared config packages, Makefile)
+- ☐ Docker — compose (db/redis/api) + Dockerfile + entrypoint written; **bring-up still unverified**. Admin image deferred; admin runs via pnpm.
+- ☑ PostgreSQL (async SQLAlchemy 2.0, UUIDv7 PKs, TIMESTAMPTZ)
+- ☑ FastAPI (app factory, /health, error envelope, structured logging)
+- ☑ Next.js admin shell (BFF httpOnly-cookie auth + refresh rotation, RBAC-aware nav)
+- ☑ Authentication / RBAC (Argon2id, JWT + refresh rotation + Redis revoke, require_permission)
+- ☑ Database migrations (Alembic verified on a fresh DB + idempotent seed)
+- ☑ Admin shell (login, users, roles screens)
 
-Design doc: `design/stage-1-foundation.md`. Acceptance criteria + milestones (1.1–1.8) defined there.
+Design doc: `docs/stage-1-foundation.md`. Acceptance criteria + milestones (1.1–1.8) defined there.
 
-## Stage 2 — Quote Engine  ☐
-- Client · Traveller · Destination · Accommodation · Activities · Vehicles
-- Pricing rules · Seasonal rates · Park fees · Quote calculation
+## Stage 2 — Quote Engine  ◑ (2.1–2.8 done & pushed; 2.9 in progress)
+Design doc: `docs/stage-2-quote-engine.md` (pricing model, ERD, engine algorithm). Build order per §9.
+
+- ☑ 2.1 Reference data — residence categories, currencies + FX, suppliers, destinations
+- ☑ 2.2 Accommodations + room types + meal plans + seasonal rates + deterministic rate selection
+- ☑ 2.3 Park/conservation fees — per destination/category, configurable child-age bounds
+- ☑ 2.4 Activities + effective-dated per-category rates
+- ☑ 2.5 Vehicles + fuel prices + transport cost (game-drive multiplier)
+- ☑ 2.6 Pricing config (markup/discount/tax) in `app_settings` + ExchangeRate service
+- ☑ 2.7 Clients + quote domain (quotes, versions, travellers, legs, selections)
+- ☑ 2.8 PricingEngine + `POST /quotes/calculate` + immutable persistence/versioning
+- ◑ 2.9 Correctness/edge/invariant tests + admin catalogue UI
+  - ☑ pure invariant suite (`tests/test_pricing_invariants.py`) — breakdown identities, Decimal-not-float, discount clamping, approval threshold, age boundaries
+  - ☑ engine edge suite (`tests/test_engine_edges.py`) — version immutability under rate drift, overlap tie-break, cost-leak sweep, FX line-for-line scaling *(written; awaiting a test DB run)*
+  - ☑ admin catalogue UI — destinations, accommodations, activities, vehicles (spec-driven `CatalogueResource`)
+  - ☐ rates/fees editing UI (seasonal rates, park fees, activity rates, fuel prices)
+
+Dev tooling: `scripts/verify.sh` (lint + type + test); `scripts/scaffold_module.py` (CRUD modules from a JSON spec); `src/lib/catalogue.ts` is the frontend equivalent.
+
+Data note: bulk/CSV importer for accommodations + rates still wanted once the full hotel data lands.
 
 ## Stage 3 — Quotation Document  ☐
 - Map the sample quotation into the data model · HTML/document template

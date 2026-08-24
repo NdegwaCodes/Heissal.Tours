@@ -17,23 +17,32 @@ export function Sidebar({ user }: { user: User }) {
         <span className="font-semibold text-neutral-900">Heissal</span>
       </div>
       <nav className="flex-1 space-y-1 p-3">
-        {items.map((item) => {
+        {items.map((item, index) => {
           const active = item.href === "/" ? pathname === "/" : pathname.startsWith(item.href);
           const Icon = item.icon;
+          // Print a group heading the first time a section appears.
+          const heading =
+            item.section && item.section !== items[index - 1]?.section ? item.section : null;
           return (
-            <Link
-              key={item.href}
-              href={item.href}
-              className={cn(
-                "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
-                active
-                  ? "bg-brand/10 text-brand"
-                  : "text-neutral-600 hover:bg-neutral-100 hover:text-neutral-900",
+            <div key={`${item.href}-group`}>
+              {heading && (
+                <p className="px-3 pb-1 pt-4 text-xs font-medium uppercase tracking-wide text-neutral-400">
+                  {heading}
+                </p>
               )}
-            >
-              <Icon className="h-4 w-4" />
-              {item.label}
-            </Link>
+              <Link
+                href={item.href}
+                className={cn(
+                  "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
+                  active
+                    ? "bg-brand/10 text-brand"
+                    : "text-neutral-600 hover:bg-neutral-100 hover:text-neutral-900",
+                )}
+              >
+                <Icon className="h-4 w-4" />
+                {item.label}
+              </Link>
+            </div>
           );
         })}
       </nav>
