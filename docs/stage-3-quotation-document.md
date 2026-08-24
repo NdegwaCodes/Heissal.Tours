@@ -27,7 +27,7 @@ This is the hard rule of the stage. Nothing below the line reaches the document:
 | Backend only | Shown to the client |
 |---|---|
 | Supplier/STO/rack rates, per-hotel cost | Final per-person rate and group total |
-| Profit % (20–25%), contingency (5%) | Inclusions list, rooming, meal plan |
+| Profit (24%), contingency (5%) | Inclusions list, rooming, meal plan |
 | Retained half of any supplier discount | Dates, nights, destination, group size |
 | Which cost line each amount came from | Option comparison table, recommendation |
 
@@ -80,10 +80,20 @@ the PDF renderer must use the **client** schema, never the internal one.
 ### 3.5 Supplier discounts and STO rates
 
 - **Rack rate with a stated discount → pass half the discount to the client.**
-  A document offering 15% off a 24,000 rack rate charges the client
-  `(100 − 7.5)% × 24,000 = 22,200`. The retained 7.5% is Heissal's margin on that line.
+  A document offering 15% off a 24,000 rack rate yields
+  `(100 − 7.5)% × 24,000 = 22,200` as the **costed** accommodation figure.
+- **The retained half-discount is NOT part of the profit percentage.** Profit is
+  calculated on the whole sum, including the half-discounted accommodation figure, so
+  the retained half is margin *on top of* the 24%. Three distinct numbers per rate:
+
+  | Number | Value on the example | Where it lives |
+  |---|---|---|
+  | What Heissal pays the hotel | `24,000 × 0.85 = 20,400` | backend only |
+  | Costed figure entering the build-up | `24,000 × 0.925 = 22,200` | backend only |
+  | Retained half-discount | `1,800` | backend only, reported as margin |
+
 - **Sell-To-Operator (STO) / tour-operator rates → use as the accommodation cost
-  directly.** No rack manipulation; margin comes from the standard profit %.
+  directly.** No rack manipulation; margin on that line is the profit % alone.
 
 ### 3.6 Margin build-up (backend only)
 
@@ -98,13 +108,20 @@ Cost components, all normalised to VAT-inclusive:
 then:
 
 ```
-cost_subtotal   = sum(components)
+cost_subtotal   = sum(components)          # accommodation at the half-discounted figure
 contingency     = cost_subtotal × 5%
 cost_basis      = cost_subtotal + contingency
-selling_total   = cost_basis × (1 + profit_pct)      # profit_pct 20–25%
+selling_total   = cost_basis × 1.24        # profit 24%, fixed
 per_person      = round_up_to_100(selling_total ÷ pax)
-group_total     = per_person × pax                   # so the two always reconcile
+group_total     = per_person × pax         # so the two always reconcile
 ```
+
+- **Profit is a fixed 24%**, applied to the whole sum. It lives in the existing
+  `app_settings["pricing"]` config (not hard-coded), with a per-quote override column
+  for the exception case.
+- **Contingency accrues profit** — it sits inside `cost_basis`, as modelled above.
+- Realised margin on a discounted-rack option is therefore `24% + contingency + the
+  retained half-discount`, which is why all three numbers are tracked separately.
 
 Deriving `group_total` back from the rounded `per_person` is deliberate: it guarantees
 the document's two headline numbers agree. The sample fails this — page 6 says
@@ -166,7 +183,12 @@ new table.
   Wasini page); that is a per-activity flag the agent sets.
 - The document carries the **quote number** (`HTQ-YYYY-NNNN`, already implemented) for
   client enquiries and CRM tracking.
-- **Fonts are used exactly as in the sample — no substitutions or alterations.**
+- **Fonts:** the exact faces aren't available yet, so the template uses close
+  equivalents *as a declared placeholder* — a high-contrast display serif and a humanist
+  sans. Both are referenced through **two CSS custom properties** (`--font-display`,
+  `--font-body`) defined in one place, so swapping in the real faces later is a
+  two-line change rather than a hunt through the template. The placeholder status is
+  noted in the template header so it can't be mistaken for the final brand type.
 - Property blurbs are **stored per property**, with AI paraphrasing them per quote so
   repeat clients don't receive identical copy.
 - Images: as-is, **auto-cropped centrally** to the template's aspect ratios. 5–6 per
@@ -212,15 +234,19 @@ Extraction is **never trusted silently**. A wrong parsed money value that reache
 client is a commercial incident, and OCR on designed images is exactly where that
 happens. The source file stays attached so any rate is traceable to its document.
 
-## 6. Image storage — recommendation
+## 6. Image storage — decided
 
-The stated preference is Neon. I'd store image **bytes in object storage or on disk**
-and keep only metadata + path in Postgres, because 5–6 images per property across a
-growing catalogue means Neon storage and egress costs for data that never needs
-transactional guarantees, and large `bytea` rows bloat backups and slow every query
-that touches the table. If they must live in Neon, they belong in a dedicated
-`property_images` table with the bytes in a separate column loaded only on demand —
-never selected by the catalogue list queries. **Decision still needed** (§8).
+**Bytes on disk / object storage; metadata rows in Postgres.** Confirmed 2026-08-24.
+Image data needs no transactional guarantees, and keeping 5–6 images per property out
+of the database avoids inflating every backup and slowing the catalogue queries that
+touch the table.
+
+`property_images` holds `accommodation_id`, `storage_path`, `sort_order`, `is_hero`,
+`width`, `height`, `content_type`, `byte_size`, `uploaded_by`, and the checksum used to
+dedupe re-uploads. Files are served through the API so access stays permission-checked
+rather than depending on a guessable public path. Originals are kept; the template's
+aspect ratios are produced by centre-cropped derivatives generated on upload, so a
+layout change can re-derive them without asking for the photos again.
 
 ## 7. CRM & analytics hook (suggestion, Stage 5)
 
@@ -242,33 +268,31 @@ materialised":
 Because versions are immutable, all of this is reconstructable historically — you can
 ask "what did we quote in June and what did it become" without a data warehouse.
 
-## 8. Open questions
+## 8. Resolved since the first draft
 
-1. **Fonts.** "Use as is" needs the actual font files or their licensed names — the
-   sample's serif display face can't be identified reliably from a PDF render, and
-   guessing a lookalike would be an alteration. Send the files or the source template.
-2. **Profit % within 20–25%** — a fixed default (22.5%?) with a per-quote override, or
-   chosen per quote every time? And per option, or per quote?
-3. **Order of profit vs retained half-discount.** Where the half-discount rule (§3.5)
-   already yields margin on the accommodation line, does the 20–25% profit also apply
-   to that line, or only to the other components? Applying both double-counts margin
-   on accommodation; my default would be to treat the retained half as that line's
-   margin and apply the profit % to everything else. Needs confirmation.
-4. **Contingency before profit?** Modelled as `(cost + 5%) × (1 + profit)` above, so
-   profit accrues on the contingency too. Confirm, or should contingency sit outside.
-5. **Chef cost** for the BB fallback — a standing figure, per-hotel, or per quote?
-6. **Child pricing.** The 1-adult-1-child case needs a rule: child rate from the hotel
+| Question | Answer (2026-08-24) |
+|---|---|
+| Image storage | Bytes on disk/object storage, metadata in Postgres (§6) |
+| Fonts | Close equivalents as a declared placeholder until the real files arrive (§3.11) |
+| Profit vs retained half-discount | Independent — profit applies to the whole sum; the retained half is margin on top (§3.5) |
+| Profit percentage | **Fixed 24%**, held in pricing config with a per-quote override (§3.6) |
+| Contingency placement | Inside `cost_basis`, so profit accrues on it (§3.6) |
+
+## 9. Open questions
+
+1. **Chef cost** for the BB fallback — a standing figure, per-hotel, or per quote?
+2. **Child pricing.** The 1-adult-1-child case needs a rule: child rate from the hotel
    document where present, and what to do when absent.
-7. **Document with both rack and STO rates** — always prefer STO, or take whichever is
+3. **Document with both rack and STO rates** — always prefer STO, or take whichever is
    cheaper after the half-discount rule?
-8. **Transfer cost source** — own fleet (costed by the existing vehicle model) or
+4. **Transfer cost source** — own fleet (costed by the existing vehicle model) or
    supplier-quoted per leg?
-9. **SGR ticket prices and classes** — who maintains them, and do they change often
+5. **SGR ticket prices and classes** — who maintains them, and do they change often
    enough to need effective dating like fuel prices?
-10. **Image storage** (§6).
-11. **Is 16% VAT ever different** (zero-rated services, non-resident pricing)?
+6. **Is 16% VAT ever different** (zero-rated services, non-resident pricing)?
+7. **The real font files**, when available.
 
-## 9. Build order
+## 10. Build order
 
 - **3.1** Schema + migration for options, rejected candidates, images, price tiers,
   transport segments, rate provenance columns

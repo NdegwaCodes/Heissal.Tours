@@ -60,12 +60,15 @@ model would double-tax every rate that arrived inclusive. Exclusive sources are 
 at ingestion (`x 1.16`) and each rate row records its VAT basis, so a rate is auditable
 back to its document. VAT becomes a disclosure line, not an arithmetic step.
 
-**Half of a supplier's stated discount is passed to the client** (Stage 3)
-A document offering 15% off rack charges the client 92.5% of rack; the retained 7.5% is
-margin on that line. Where only STO/tour-operator rates exist, that rate is the cost and
-margin comes from the standard profit percentage. Written down because the two paths yield
-margin differently, and applying the profit percentage on top of a retained half-discount
-would double-count it.
+**Half of a supplier's stated discount is passed to the client, and profit stacks on top**
+(Stage 3, confirmed 2026-08-24)
+A document offering 15% off rack yields 92.5% of rack as the *costed* accommodation figure,
+while Heissal pays 85%. The retained 7.5% is **not** counted inside the profit percentage:
+profit is calculated on the whole sum, so realised margin on such an option is 24% plus
+contingency plus the retained half. Three numbers per rate therefore have to be tracked
+separately — what we pay, what we cost it at, and what we retain — or the margin reporting
+silently understates itself. Where only STO/tour-operator rates exist there is no retained
+half, and the profit percentage is the whole margin.
 
 **Per-person is rounded up, and the group total is derived from it** (Stage 3)
 Rounding per-person to the nearest 100 and multiplying back by headcount guarantees the
@@ -89,3 +92,24 @@ attached to every rate.
 parks and reserves are destinations of a different type. Adding a separate area/zone table
 would buy nothing that `destination_id` plus the existing `region`/`country` columns do not,
 and would turn "properties in this area" from an indexed FK lookup into a join.
+
+**Profit is a fixed 24%, held in config** (Stage 3, 2026-08-24)
+Chosen over a per-quote judgement call within a 20–25% band so that quotes are comparable
+and reproducible, and so margin analysis has a constant to measure against. It lives in
+`app_settings["pricing"]` with a per-quote override for the exception, never hard-coded —
+same rule as every other business number in this system. Contingency (5%) sits inside the
+cost basis, so profit accrues on it too.
+
+**Image bytes live outside Postgres; only metadata is a row** (Stage 3, 2026-08-24)
+5–6 photos per property need no transactional guarantees, and large `bytea` columns inflate
+every backup and slow the catalogue queries that touch the table. Files sit on disk/object
+storage behind the API so access stays permission-checked rather than resting on a
+guessable public path. Originals are retained and the template's aspect ratios come from
+centre-cropped derivatives, so a layout change can re-derive them without re-collecting
+photographs.
+
+**Template fonts are a declared placeholder behind two CSS variables** (Stage 3, 2026-08-24)
+The brand faces aren't available yet and cannot be identified reliably from a PDF render,
+so close equivalents stand in — but only via `--font-display` / `--font-body` defined in one
+place, making the eventual swap a two-line change. The placeholder is labelled in the
+template header so a stand-in is never mistaken for the real brand type.
