@@ -48,10 +48,25 @@ Dev tooling: `scripts/verify.sh` (lint + type + test); `scripts/scaffold_module.
 
 Data note: bulk/CSV importer for accommodations + rates still wanted once the full hotel data lands.
 
-## Stage 3 — Quotation Document  ☐
-- Map the sample quotation into the data model · HTML/document template
-- PDF generation · Quote versioning · Quote sending
-- *Blocked input:* sample quotation document (not yet provided).
+## Stage 3 — Quotation Document  ◑ (unblocked 2026-08-24; design doc written, not yet built)
+Design doc: `docs/stage-3-quotation-document.md` — confirmed rules, data model, ingestion
+pipeline, template map, open questions. **Read that, not this summary.**
+
+Reference template: `HFC Bank Diani Quotation.pdf` (25-pax corporate coastal retreat,
+six accommodation options) — supplied by the client and now the target output.
+
+- ☐ 3.1 Schema: quote options, rejected candidates, property images, activity price tiers, transport segments, rate provenance (VAT basis, rack vs STO, stated discount)
+- ☐ 3.2 Supplier-document ingestion — PDF/image extract → **confirm** → stored date-ranged rates
+- ☐ 3.3 Option pricing — cheapest-within-hotel, meal-plan fallback chain, ceil(pax/capacity) rooming with full-price single, half-discount pass-through, 5% contingency + 20–25% profit
+- ☐ 3.4 Multi-option quote assembly (3–9 hotels + 1–2 BnBs), recommendation, rejected candidates
+- ☐ 3.5 HTML template matching the sample
+- ☐ 3.6 PDF generation + quote number + validity
+- ☐ 3.7 Correctness tests — the sample reproduced end to end
+
+Key rules (detail in the design doc): rates are stored **VAT-inclusive** (16%; exclusive
+sources normalised ×1.16) so the engine adds no tax on top; margin, contingency and
+supplier/STO rates are **backend only**; per-person is rounded up to the nearest 100 and
+the group total derived from it so the two always reconcile.
 
 ## Stage 4 — Itinerary Engine  ☐
 - Destinations · Route data · Distance/time calculation · Fuel calculation
@@ -83,5 +98,5 @@ Data note: bulk/CSV importer for accommodations + rates still wanted once the fu
 
 ## Pending inputs from client
 1. GitHub repo created + one-time push access (unblocks all of Stage 1).
-2. Sample quotation document (needed for Stage 3; useful reference earlier).
+2. ~~Sample quotation document~~ ✅ received 2026-08-24 (`HFC Bank Diani Quotation.pdf`); rules confirmed in `docs/stage-3-quotation-document.md`. Still needed from the client: **the template's font files** (must be used unaltered), the profit-% default within 20–25%, and the chef-cost figure for the bed-and-breakfast fallback.
 3. ~~Stage 1 defaults~~ ✅ resolved: residency-driven pricing tier + default presentation currency (KES/USD/EUR/GBP, overridable), `Africa/Nairobi` timezone, create `web`+`portal` stubs now, repo slug `heissal-tours-and-travel-platform`.

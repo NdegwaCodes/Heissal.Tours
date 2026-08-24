@@ -53,3 +53,39 @@ than guessing them.
 `CLAUDE.md` + `rules/` + memory + a decision log, with `.claude/agents/` empty. Contracts, a
 plan/verify pipeline, and generated digests are deferred until their specific pain shows up —
 see `docs/context-repo-quickstart.md`.
+
+**Rates are stored VAT-inclusive; the engine adds no tax on top** (Stage 3, 2026-08-24)
+Kenyan supplier documents quote inclusive of 16% VAT by default, so an exclusive-then-add
+model would double-tax every rate that arrived inclusive. Exclusive sources are normalised
+at ingestion (`x 1.16`) and each rate row records its VAT basis, so a rate is auditable
+back to its document. VAT becomes a disclosure line, not an arithmetic step.
+
+**Half of a supplier's stated discount is passed to the client** (Stage 3)
+A document offering 15% off rack charges the client 92.5% of rack; the retained 7.5% is
+margin on that line. Where only STO/tour-operator rates exist, that rate is the cost and
+margin comes from the standard profit percentage. Written down because the two paths yield
+margin differently, and applying the profit percentage on top of a retained half-discount
+would double-count it.
+
+**Per-person is rounded up, and the group total is derived from it** (Stage 3)
+Rounding per-person to the nearest 100 and multiplying back by headcount guarantees the
+document's two headline numbers agree. The client's own sample quotation shows why: page 6
+states 28,800 per person while the comparison table says 28,400, both against the same
+720,000 total. Deriving one from the other makes that class of error impossible.
+
+**A room is charged per room, and an odd single room is charged in full** (Stage 3)
+Rooms required is `ceil(pax / room_capacity)` — twin-sharing is just the capacity-2 case,
+villas the capacity-4 case. A 25-person group pays for 13 rooms, not 12.5: suppliers do not
+half-bill an under-occupied room, so neither do we.
+
+**Extracted supplier rates require human confirmation before they are stored** (Stage 3)
+Hotel rate sheets arrive as PDFs and designed images, so extraction means OCR-grade
+uncertainty on money values. A wrong parsed rate that reaches a client is a commercial
+incident, not a bug, so extraction proposes and a person approves. The source file stays
+attached to every rate.
+
+**Destinations double as the geographic grouping for properties** (Stage 3)
+"Diani" is a destination, and every accommodation in the sample quotation hangs off it;
+parks and reserves are destinations of a different type. Adding a separate area/zone table
+would buy nothing that `destination_id` plus the existing `region`/`country` columns do not,
+and would turn "properties in this area" from an indexed FK lookup into a join.
