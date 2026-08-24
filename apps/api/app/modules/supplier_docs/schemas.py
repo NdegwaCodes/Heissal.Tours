@@ -141,8 +141,49 @@ class ConfirmRow(BaseModel):
         return v.upper() if v else v
 
 
+class ConfirmDefaults(BaseModel):
+    """Values applied to every row being confirmed, unless the row overrides it.
+
+    This is what makes a partly-read document usable. Most sheets the parser
+    only half-reads are missing the *same* field on every row — the residence
+    category, the currency, or the occupancy — because the document never states
+    it. Without shared defaults a reviewer would retype one value a hundred and
+    fifty times, and a confirm screen that tedious is a confirm screen people
+    stop reading.
+
+    A row's own value always wins, so a default cannot silently overwrite
+    something the parser did read.
+    """
+
+    room_type_id: uuid.UUID | None = None
+    meal_plan_id: uuid.UUID | None = None
+    residence_category_id: uuid.UUID | None = None
+    occupancy: int | None = Field(default=None, ge=1, le=12)
+    currency: str | None = None
+    rate_kind: str | None = None
+    supplier_discount_pct: Decimal | None = Field(default=None, ge=0, le=100)
+    vat_inclusive: bool | None = None
+    vat_pct: Decimal | None = Field(default=None, ge=0, le=100)
+    child_min_age: int | None = Field(default=None, ge=0, le=25)
+    child_max_age: int | None = Field(default=None, ge=0, le=25)
+    child_rate: Decimal | None = Field(default=None, gt=0)
+
+    @field_validator("currency")
+    @classmethod
+    def _upper(cls, v: str | None) -> str | None:
+        return v.upper() if v else v
+
+    @field_validator("rate_kind")
+    @classmethod
+    def _known_kind(cls, v: str | None) -> str | None:
+        if v is not None and v not in RATE_KINDS:
+            raise ValueError(f"rate_kind must be one of {', '.join(RATE_KINDS)}")
+        return v
+
+
 class ConfirmRequest(BaseModel):
     rows: list[ConfirmRow] = Field(min_length=1)
+    defaults: ConfirmDefaults | None = None
 
 
 class ConfirmResultRow(BaseModel):

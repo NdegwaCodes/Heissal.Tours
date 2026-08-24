@@ -109,3 +109,57 @@ def swahili_beach_shaped_pdf(
     if marker:
         rows.append((columns[0], 40.0, marker))
     return make_pdf(rows, size=(1000, 792))
+
+
+def temple_point_shaped_pdf() -> bytes:
+    """The transposed layout: room blocks, meal-plan columns, occupancy rows.
+
+    Modelled on Temple Point's 2027/28 KSH STO sheet, whose figures these are.
+    Nothing here can be read by cell position: the ruled table on that page holds
+    only the price rows, so the room name, meal plans, seasons and dates have to
+    be matched to each price by coordinate.
+    """
+    meal_x = (202.0, 245.0, 295.0, 340.0, 397.0, 440.0, 491.0, 538.0)
+    price_x = (195.0, 239.0, 285.0, 330.0, 388.0, 435.0, 483.0, 528.0)
+    rows: list[tuple[float, float, str]] = [
+        (36.0, 760.0, "KSH STO Rates 2027/2028"),
+        (36.0, 745.0, "Rates are per room per night, in KSH & inclusive of all taxes."),
+        (225.0, 720.0, "HIGH SEASON"),
+        (414.0, 720.0, "FESTIVE SEASON"),
+        (221.0, 705.0, "11.01.27 - 19.12.27"),
+        (413.0, 705.0, "20.12.27 - 10.01.28"),
+    ]
+    blocks = [
+        (
+            "CREEK DELUXE",
+            [
+                ("Single", ("21,600", "24,000", "26,500", "28,400",
+                            "30,200", "32,600", "35,100", "37,000")),
+                ("Double", ("24,000", "28,900", "33,700", "37,600",
+                            "33,600", "38,400", "43,300", "47,200")),
+            ],
+        ),
+        (
+            "BOUTIQUE",
+            [
+                ("Single", ("17,500", "19,900", "22,400", "24,300",
+                            "24,500", "26,900", "29,400", "31,300")),
+                ("Triple", ("19,400", "26,700", "34,100", "39,900",
+                            "27,200", "34,500", "41,800", "47,700")),
+            ],
+        ),
+    ]
+    y = 680.0
+    for room, data in blocks:
+        rows.append((36.0, y, room))
+        # Each season block repeats the same four meal-plan columns.
+        for index, code in enumerate(("BO", "B&B", "HB", "FB") * 2):
+            rows.append((meal_x[index], y, code))
+        y -= 25.0
+        for label, prices in data:
+            rows.append((36.0, y, label))
+            for index, price in enumerate(prices):
+                rows.append((price_x[index], y, price))
+            y -= 25.0
+        y -= 15.0
+    return make_pdf(rows)

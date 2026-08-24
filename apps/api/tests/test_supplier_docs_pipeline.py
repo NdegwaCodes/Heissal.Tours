@@ -23,7 +23,11 @@ from app.core.config import settings
 from app.db.session import AsyncSessionLocal
 from app.modules.accommodations.models import Accommodation, AccommodationRate
 from tests.conftest import auth_headers
-from tests.pdf_fixture import make_pdf, swahili_beach_shaped_pdf
+from tests.pdf_fixture import (
+    make_pdf,
+    swahili_beach_shaped_pdf,
+    temple_point_shaped_pdf,
+)
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
@@ -121,7 +125,9 @@ async def test_upload_extract_confirm_creates_rates(
     )
     assert resp.status_code == 200, resp.text
     summary = resp.json()
-    assert summary["provider"] == "pdf-grid"
+    # The composite names the reader that won, so a surprising result can be
+    # traced to the code that produced it.
+    assert summary["provider"] == "pdf-composite:pdf-grid"
     assert summary["total_rows"] == 12
     assert summary["complete_rows"] == 12
     assert summary["needs_other_provider"] is False
@@ -520,3 +526,158 @@ async def test_a_document_with_no_property_cannot_confirm_rates(
     )
     assert resp.status_code == 400
     assert "attach this document to a property" in resp.text.lower()
+
+
+async def test_the_transposed_layout_is_read_by_the_block_reader(
+    client: AsyncClient, admin_tokens, property_for_ingestion, sample_catalogue
+):
+    """Meal plans as columns, occupancy as the row label, two season blocks.
+
+    Temple Point's shape. The grid reader returns nothing for it, so this proves
+    the composite picks the reader by result rather than by guessing the layout,
+    and that a price is matched to the meal plan above it and the season block
+    above that.
+    """
+    h = auth_headers(admin_tokens)
+    resp = await _upload(
+        client,
+        h,
+        content=temple_point_shaped_pdf(),
+        accommodation_id=property_for_ingestion["accommodation_id"],
+        filename="transposed.pdf",
+    )
+    assert resp.status_code == 201, resp.text
+    doc_id = resp.json()["id"]
+
+    summary = (
+        await client.post(
+            f"{API}/supplier-documents/{doc_id}/extract", headers=h, json={}
+        )
+    ).json()
+    assert summary["provider"] == "pdf-composite:pdf-block"
+    assert summary["total_rows"] == 32
+    assert summary["complete_rows"] == 32
+
+    rows = (
+        await client.get(f"{API}/supplier-documents/{doc_id}/extractions", headers=h)
+    ).json()
+    by_key = {
+        (
+            r["proposed"]["room_type"],
+            r["proposed"]["occupancy"],
+            r["proposed"]["meal_plan"],
+            r["proposed"]["season_name"],
+        ): r["proposed"]
+        for r in rows
+    }
+
+    # The sheet's own figures: Creek Deluxe full board is 28,400 single in high
+    # season and 37,000 in the festive season, and the windows differ.
+    high = by_key[("CREEK DELUXE", 1, "FB", "High")]
+    festive = by_key[("CREEK DELUXE", 1, "FB", "Festive")]
+    assert high["rate_per_night"] == "28400"
+    assert festive["rate_per_night"] == "37000"
+    assert high["effective_from"] == "2027-01-11"
+    assert festive["effective_from"] == "2027-12-20"
+
+    # "BO" (bed only) maps onto the seeded RO plan rather than becoming a new one.
+    assert by_key[("CREEK DELUXE", 1, "RO", "High")]["rate_per_night"] == "21600"
+
+    # Occupancy is the row label here, and both rooms carry their own prices.
+    assert by_key[("CREEK DELUXE", 2, "FB", "High")]["rate_per_night"] == "37600"
+    assert by_key[("BOUTIQUE", 3, "FB", "High")]["rate_per_night"] == "39900"
+
+    # These rows are confirmable without a reviewer filling anything in.
+    resp = await client.post(
+        f"{API}/supplier-documents/{doc_id}/confirm",
+        headers=h,
+        json={
+            "rows": [
+                {
+                    "extraction_id": next(
+                        r["id"]
+                        for r in rows
+                        if r["proposed"]["room_type"] == "CREEK DELUXE"
+                        and r["proposed"]["occupancy"] == 1
+                        and r["proposed"]["meal_plan"] == "FB"
+                        and r["proposed"]["season_name"] == "High"
+                    ),
+                    "accept": True,
+                    "room_type_id": property_for_ingestion["rooms"]["Standard Room"],
+                    "residence_category_id": sample_catalogue["residence_citizen"],
+                    "rate_kind": "sto",
+                }
+            ]
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["confirmed"] == 1
+    async with AsyncSessionLocal() as db:
+        rate = await db.get(
+            AccommodationRate, uuid.UUID(resp.json()["rows"][0]["rate_id"])
+        )
+        assert rate.rate_per_night == D("28400.0000")
+        assert rate.occupancy == 1
+
+
+async def test_shared_defaults_make_a_partly_read_sheet_confirmable(
+    client: AsyncClient, admin_tokens, property_for_ingestion, sample_catalogue
+):
+    """One value set once, applied to every row that lacks it.
+
+    This is what makes a half-read document usable. Real sheets commonly omit
+    the same field on every row — the residence category is never printed at all
+    — and without shared defaults a reviewer retypes it for every rate. A row's
+    own value still wins, so a default cannot overwrite what was read.
+    """
+    h = auth_headers(admin_tokens)
+    resp = await _upload(
+        client,
+        h,
+        content=swahili_beach_shaped_pdf(column_without_occupancy=True),
+        accommodation_id=property_for_ingestion["accommodation_id"],
+        filename="defaults.pdf",
+    )
+    doc_id = resp.json()["id"]
+    await client.post(f"{API}/supplier-documents/{doc_id}/extract", headers=h, json={})
+    rows = (
+        await client.get(f"{API}/supplier-documents/{doc_id}/extractions", headers=h)
+    ).json()
+
+    unlabelled = [r for r in rows if r["proposed"]["occupancy"] is None]
+    labelled = next(r for r in rows if r["proposed"]["occupancy"] == 2)
+    assert len(unlabelled) == 3
+
+    resp = await client.post(
+        f"{API}/supplier-documents/{doc_id}/confirm",
+        headers=h,
+        json={
+            "defaults": {
+                "residence_category_id": sample_catalogue["residence_citizen"],
+                "room_type_id": property_for_ingestion["rooms"]["Standard Room"],
+                "occupancy": 2,
+                "rate_kind": "sto",
+            },
+            "rows": [
+                # Takes occupancy 2 from the defaults.
+                {"extraction_id": unlabelled[0]["id"], "accept": True},
+                # States its own occupancy, which must survive the defaults.
+                {"extraction_id": labelled["id"], "accept": True, "occupancy": 3},
+            ],
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert (body["confirmed"], body["failed"]) == (2, 0)
+
+    by_extraction = {r["extraction_id"]: r["rate_id"] for r in body["rows"]}
+    async with AsyncSessionLocal() as db:
+        from_default = await db.get(
+            AccommodationRate, uuid.UUID(by_extraction[unlabelled[0]["id"]])
+        )
+        from_row = await db.get(
+            AccommodationRate, uuid.UUID(by_extraction[labelled["id"]])
+        )
+    assert from_default.occupancy == 2, "the default supplied the missing occupancy"
+    assert from_row.occupancy == 3, "the row's own value must win over the default"
+    assert from_default.rate_kind == "sto" and from_row.rate_kind == "sto"

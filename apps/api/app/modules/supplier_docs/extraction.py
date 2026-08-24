@@ -31,6 +31,7 @@ from app.integrations.rate_extraction import (
     ExtractionResult,
 )
 from app.modules.supplier_docs.parsing import (
+    document_year,
     parse_currency,
     parse_date_range,
     parse_meal_plan,
@@ -49,9 +50,6 @@ _MIN_ROWS = 2
 # tables at all under that strategy, so a text-position pass is tried as well.
 # Both are deterministic; neither guesses.
 _TEXT_STRATEGY = {"vertical_strategy": "text", "horizontal_strategy": "text"}
-
-_YEAR = re.compile(r"(?<![0-9])(20[2-3]\d)(?![0-9])")
-
 
 def _clean(cell: str | None) -> str:
     return " ".join((cell or "").split())
@@ -114,11 +112,10 @@ class GridRateExtractor:
                 pages = [(n, p, p.extract_text() or "") for n, p in enumerate(pdf.pages, 1)]
                 text_chars = sum(len(t) for _, _, t in pages)
                 # Season windows are often written without a year ("03 Jan - 02
-                # Apr") because the sheet's title carries it. The earliest year
-                # named in the document is that year; a sheet headed
-                # "2026 to 2027" starts in 2026.
-                years = sorted({int(y) for _, _, t in pages for y in _YEAR.findall(t)})
-                doc_year = years[0] if years else None
+                # Apr") because the sheet's title carries it. See document_year
+                # for why this is the most frequently named year rather than the
+                # earliest one.
+                doc_year = document_year(" ".join(t for _, _, t in pages))
                 if doc_year is None:
                     result.warnings.append(
                         "the document does not name a year, so any season window "
@@ -376,8 +373,16 @@ class GridRateExtractor:
         return round(max(0.1, 1.0 - 0.25 * len(warnings)), 2)
 
 
-def default_extractor() -> GridRateExtractor:
-    return GridRateExtractor()
+def default_extractor():
+    """The provider the ingestion service uses unless one is injected.
+
+    Composite rather than the grid reader alone: the corpus contains at least two
+    incompatible layouts and which one a document uses cannot be told reliably
+    before parsing it.
+    """
+    from app.modules.supplier_docs.composite import CompositeRateExtractor
+
+    return CompositeRateExtractor()
 
 
 __all__ = ["GridRateExtractor", "default_extractor"]

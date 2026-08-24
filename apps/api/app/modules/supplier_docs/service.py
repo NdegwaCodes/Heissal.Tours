@@ -39,6 +39,7 @@ from app.modules.supplier_docs.models import (
     SupplierDocumentExtraction,
 )
 from app.modules.supplier_docs.schemas import (
+    ConfirmDefaults,
     ConfirmResult,
     ConfirmResultRow,
     ConfirmRow,
@@ -241,7 +242,12 @@ class IngestionService:
     # -- confirm ---------------------------------------------------------- #
 
     async def confirm(
-        self, document_id: uuid.UUID, decisions: list[ConfirmRow], *, reviewer: uuid.UUID
+        self,
+        document_id: uuid.UUID,
+        decisions: list[ConfirmRow],
+        *,
+        reviewer: uuid.UUID,
+        defaults: ConfirmDefaults | None = None,
     ) -> ConfirmResult:
         """Apply a reviewer's decisions. Accepted rows become stored rates.
 
@@ -293,7 +299,9 @@ class IngestionService:
                 continue
 
             try:
-                rate = await self._build_rate(doc, row, decision)
+                rate = await self._build_rate(
+                    doc, row, self._with_defaults(decision, defaults)
+                )
             except AppError as exc:
                 failed += 1
                 results.append(
@@ -332,6 +340,25 @@ class IngestionService:
         return ConfirmResult(
             confirmed=confirmed, rejected=rejected, failed=failed, rows=results
         )
+
+    @staticmethod
+    def _with_defaults(
+        decision: ConfirmRow, defaults: ConfirmDefaults | None
+    ) -> ConfirmRow:
+        """Fill a decision's blanks from the batch defaults.
+
+        The row wins wherever it stated something, so a default can only supply
+        what the reviewer left empty — never overwrite a value they chose or the
+        parser read.
+        """
+        if defaults is None:
+            return decision
+        supplied = {
+            field: value
+            for field, value in defaults.model_dump(exclude_none=True).items()
+            if getattr(decision, field, None) is None
+        }
+        return decision.model_copy(update=supplied) if supplied else decision
 
     async def _build_rate(
         self,

@@ -147,4 +147,6 @@ async def confirm_extractions(
     user: User = Depends(require_permission(CONFIRM)),
 ):
     """Apply review decisions. This is the only path that creates rates."""
-    return await IngestionService(db).confirm(document_id, body.rows, reviewer=user.id)
+    return await IngestionService(db).confirm(
+        document_id, body.rows, reviewer=user.id, defaults=body.defaults
+    )

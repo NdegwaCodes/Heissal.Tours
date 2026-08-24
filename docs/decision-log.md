@@ -231,3 +231,51 @@ while still looking plausible. Baobab puts prices immediately after a season lab
 permissive year pattern read the price 280 as the year 0280. A merged cell holding
 "280 370 500" would attach the single-occupancy price to every occupancy column. In each
 case the parser now returns nothing and the row goes to a human.
+
+**Two readers, chosen by result rather than by sniffing the layout** (Stage 3.2, 2026-08-24)
+Supplier sheets use at least two incompatible layouts: occupancy as a column with the season
+as a row (Swahili Beach, Baobab), and the transposed shape where a room name heads a block,
+meal plans are the columns and occupancy is the row label (Temple Point). There is no
+reliable signal for which a document uses, so both readers run and the one producing more
+*confirmable* rows wins, with the winner named in the summary. Results are never merged: two
+readers describing the same page produce every rate twice, and a reviewer cannot tell a real
+duplicate from a parsing artefact.
+
+**The transposed reader works from word coordinates, not table cells** (Stage 3.2, 2026-08-24)
+On the Temple Point sheet the ruled table holds only the price rows — the room name, the meal
+plans, the seasons and the date windows all sit outside it in page text — so cell position
+alone cannot say what a price means. Each price is matched to the meal-plan heading above it
+and the season block above that. Asking pdfplumber for a text-positioned table on those pages
+was not an option either: it splits "26,500" into the cells "26", ",5" and "00".
+
+**The document year is the commonest year named, not the earliest** (Stage 3.2, 2026-08-24)
+Season windows are often written without a year because the sheet's title carries it. Taking
+the earliest year in the document looked reasonable and was wrong on real files: the Medina
+Palms 2026 contract carries a "MAY 2025" revision stamp, and the Swahili Beach 2026 contract
+names 2025 twice against 2026 a hundred and seventeen times. Both would have had every
+undated season shifted a year early, with dates that still looked entirely plausible. Ties go
+to the earlier year, since a contract season spanning two years starts in the earlier one.
+
+**A price must sit under a column heading to count as a rate** (Stage 3.2, 2026-08-24)
+Allowing a room name as a row label — needed for the sheets that key rates by room rather
+than occupancy — let prose become data: the Temple Point child policy paragraph produced rate
+rows of 3, 12 and 60, which are ages. A line now needs at least two amounts aligned with
+meal-plan columns before it is read as rates. Alignment is the real relationship being
+modelled, so it is a better guard than any keyword blacklist.
+
+**Confirmation accepts shared defaults** (Stage 3.2, 2026-08-24)
+Most half-read sheets are missing the *same* field on every row, because the document never
+states it — the residence category is never printed, and many sheets never name an occupancy.
+Without shared defaults a reviewer would retype one value a hundred and fifty times, and a
+confirm screen that tedious stops being read, which defeats the only safeguard in the
+pipeline. A row's own value always wins, so a default can fill a blank but never overwrite
+what the parser read or the reviewer chose.
+
+**Per-person sheets are flagged, not converted** (Stage 3.2, 2026-08-24)
+Some sheets price per guest ("Rates are per person sharing" — Turtle Bay) rather than per
+room, which is what every stored rate means. Converting one to the other requires knowing the
+occupancy the supplier assumed, which the sheets do not state, so those rows carry an explicit
+warning and wait for a person instead. Deciding whether to model a per-person basis properly
+is deferred until Stage 3.3 shows what the pricing engine needs. "per room" wins when a page
+says both, because a sheet stating a per-room basis usually mentions per person only for a
+supplement.

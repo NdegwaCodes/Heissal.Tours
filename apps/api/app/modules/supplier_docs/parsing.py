@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import calendar
 import re
+from collections import Counter
 from datetime import date
 from decimal import Decimal, InvalidOperation
 
@@ -207,13 +208,17 @@ _MONTHS["SEPT"] = 9
 # "04/01/2026", "11.01.27", "3-1-2026" — day first, as every sheet in the corpus
 # is written, and as Kenyan convention has it.
 _NUMERIC = re.compile(r"(\d{1,2})[/.\-](\d{1,2})[/.\-](\d{2,4})")
-# "03 Jan", "23 Dec '27", "1 Nov".
+# "03 Jan", "23 Dec '27", "1 Nov", and the ordinal form several sheets write in
+# prose ("6th January - 28th February").
 # The year is accepted ONLY as four digits or behind an apostrophe. Without that
 # restriction the optional group swallows whatever number follows the month, and
 # on the Baobab sheet the number following "03 Jan" is the price 280 — which
 # parsed as the year 280. A price silently becoming a date is precisely the
 # failure this parser exists to avoid.
-_NAMED = re.compile(r"(\d{1,2})\s*([A-Za-z]{3,9})\.?(?:\s*(?:'(\d{2})|(\d{4})))?")
+_NAMED = re.compile(
+    r"(\d{1,2})(?:st|nd|rd|th)?\s*([A-Za-z]{3,9})\.?"
+    r"(?:\s*(?:'(\d{2})|(\d{4})|(\d{2})(?![\d.,])))?"
+)
 _SEPARATORS = re.compile(r"\s*(?:-|–|—|to|until|till)\s*", re.IGNORECASE)
 
 
@@ -247,7 +252,14 @@ def _one_date(text: str, *, default_year: int | None) -> tuple[date | None, bool
     m = _NAMED.search(text)
     if m:
         day, name = m.group(1), m.group(2).upper()
-        raw_year = m.group(3) or m.group(4)
+        # A bare two-digit year after the month ("30 April 26") is accepted only
+        # inside a plausible range. Without the range a price would qualify, and
+        # the Baobab sheet puts its prices immediately after the season, where
+        # "03 Jan - 02 Apr 280" once parsed as the year 280.
+        bare = m.group(5)
+        if bare is not None and not (24 <= int(bare) <= 35):
+            bare = None
+        raw_year = m.group(3) or m.group(4) or bare
         month = _MONTHS.get(name) or _MONTHS.get(name[:3])
         year = _year(raw_year, default=default_year)
         if not month or not year:
@@ -315,3 +327,67 @@ def parse_date_range(
         return start, end.replace(year=end.year + 1)
     except ValueError:
         return start, None
+
+
+# --------------------------------------------------------------------------- #
+# Season definitions stated in prose
+# --------------------------------------------------------------------------- #
+
+_SEASON_LINE = re.compile(
+    r"(?P<name>PEAK|FESTIVE|EASTER|SHOULDER|HIGH|LOW|MID|GREEN)\s+SEASON(?P<rest>[^\n]*)",
+    re.IGNORECASE,
+)
+
+
+def season_windows(
+    text: str, *, default_year: int | None = None
+) -> dict[str, list[tuple[date, date]]]:
+    """Season name to the date windows a document defines for it, in prose.
+
+    Several sheets state their seasons on one page ("High Season 6th January -
+    28th February; 3rd April - 6th April") and then label the rate table only
+    with the season name. Without this mapping those rates have no dates at all.
+
+    These prose ranges rarely state a year — the sheet's title carries it — so
+    ``default_year`` is normally required for anything to parse at all.
+
+    A season may legitimately carry several windows, and they are all returned:
+    the caller decides what to do when there is more than one, because silently
+    picking the first would attach a rate to part of its real season.
+    """
+    found: dict[str, list[tuple[date, date]]] = {}
+    for match in _SEASON_LINE.finditer(text or ""):
+        name = match.group("name").title()
+        windows: list[tuple[date, date]] = []
+        # Semicolons and "&" separate one season's several windows.
+        for chunk in re.split(r";|&|\band\b", match.group("rest")):
+            start, end = parse_date_range(chunk, default_year=default_year)
+            if start and end:
+                windows.append((start, end))
+        if windows:
+            found.setdefault(name, [])
+            for window in windows:
+                if window not in found[name]:
+                    found[name].append(window)
+    return found
+
+
+_ANY_YEAR = re.compile(r"(?<![0-9])(20[2-3][0-9])(?![0-9])")
+
+
+def document_year(text: str) -> int | None:
+    """The year a sheet is *for*, used when a season window omits it.
+
+    The most frequently named year, not the earliest. Earliest is wrong on real
+    documents: the Medina Palms 2026 contract carries a "MAY 2025" revision
+    stamp, and the Swahili Beach 2026 contract mentions 2025 twice against 2026
+    a hundred and seventeen times. Taking the earliest dated every season in
+    those sheets a year early — a silent error, since the dates still look
+    entirely plausible. Ties go to the earlier year, because a contract season
+    normally starts in the earlier of the two years it spans.
+    """
+    counts = Counter(_ANY_YEAR.findall(text or ""))
+    if not counts:
+        return None
+    most = max(counts.values())
+    return min(int(year) for year, count in counts.items() if count == most)

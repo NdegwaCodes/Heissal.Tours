@@ -416,27 +416,65 @@ happens. The source file stays attached so any rate is traceable to its document
 
 ### 5b. What the deterministic parser actually reads (measured 2026-08-24)
 
-Measured by running `GridRateExtractor` over all 35 documents, with the uploader
-declaring currency and board basis as the confirm flow does:
+Measured by running the extractor over all 35 documents with the uploader declaring
+currency and board basis, as the confirm flow does.
 
-| Outcome | Documents | Complete candidate rows |
+| Outcome | Documents | Confirmable rows |
 |---|---|---|
-| Usable — produced confirmable rows | **5** | 644 |
-| Partial — prices and dates read, but a field missing on every row | 9 | 0 |
-| Recognised no rate grid at all | 18 | 0 |
-| Image-only scans (need the vision provider) | 3 | 0 |
+| **Usable** — rows complete enough to confirm as they stand | **8** | 761 |
+| **Partial** — prices, rooms and meal plans read; occupancy and/or dates not | 12 | 0 |
+| Unrecognised — no rate grid found | 12 | 0 |
+| Image-only scans — need a vision provider | 3 | 0 |
 
-This is well short of "32 of 35 are machine-readable". A text layer is necessary but
-not sufficient: the parser handles the shape where **occupancy is a column and the
-season window is a row** (both Swahili Beach contracts, both Baobab sheets,
-Hemmingways), and the other layouts need work it has not had yet. The largest known
-gap is the **transposed** shape, where meal plans are the columns and occupancy is the
-row label — Temple Point is the clearest example and currently yields nothing.
+Two readers cover two layout families (§5c). The eight usable documents are both Swahili
+Beach contracts, both Baobab sheets, both Temple Point sheets, Hemmingways and Reef.
 
-The pipeline is nonetheless complete and useful: a sheet the parser cannot read is
-reported as unrecognised rather than as empty, and rates for it are entered by hand
-against the stored document. Coverage improves by teaching the parser more shapes,
-which does not change the ingestion contract.
+**This is not "every hotel imported", and the gap is structural rather than a bug.**
+What blocks the remaining sheets:
+
+- **Occupancy** is missing on every row of all twelve partial documents, because those
+  sheets key rates by room category and never state how many guests a price covers. This
+  is recoverable in one action: `defaults` on the confirm request sets it for the whole
+  batch (§5d).
+- **Dates** are missing on most partial rows, and those rows carry no season name either,
+  so they cannot be filled from a season definition or a shared default. Each of Pride
+  Inn, Nyali, Medina Palms, CityBlue and Mukima Manor arranges its seasons differently,
+  so this is per-sheet parser work — roughly a dozen distinct layouts.
+- **Three documents contain no text at all.** Peak Hotels is two page images; both Soames
+  sheets have neither text nor images, meaning the content is vector outlines. No parser
+  can read these; they need OCR or a vision model, which is a decision and an API key
+  rather than a code change.
+
+The working answer for anything unreadable is unchanged and deliberate: the document is
+stored, the sheet is reported as unrecognised rather than empty, and its rates are entered
+by hand against it. Improving coverage never changes the ingestion contract.
+
+Extraction cost, for reference: the largest real document (18 pages, 9 MB) takes about six
+seconds per reader. If sheets get much larger, `/extract` should move to a background job.
+
+### 5c. The two layout families
+
+| Family | Shape | Reader | Examples |
+|---|---|---|---|
+| Row-per-season | Occupancy is a column, the season window is a row | `GridRateExtractor` | Swahili Beach, Baobab |
+| Transposed block | Room name heads a block, meal plans are columns, occupancy is the row label | `BlockRateExtractor` | Temple Point |
+
+Both run on every document and the one producing more confirmable rows wins; the summary
+names it (`pdf-composite:pdf-block`). There is no reliable way to tell the families apart
+before parsing, and results are never merged — see the decision log.
+
+A third variant is read by the block reader: sheets keyed by **room category** rather than
+occupancy (Turtle Bay). Those rows come out without an occupancy, which is correct, because
+the sheet does not state one.
+
+### 5d. Confirming a partly-read sheet
+
+`POST /supplier-documents/{id}/confirm` accepts `defaults` alongside `rows`: values applied
+to every row that does not state its own. This is what makes a partial document usable —
+the residence category is never printed on any sheet in the corpus, and occupancy is absent
+from twelve of them, so without it a reviewer would retype one value a hundred and fifty
+times. A row's own value always wins, so a default can fill a blank but never overwrite what
+the parser read.
 
 ### 5a. The real corpus (surveyed 2026-08-24)
 

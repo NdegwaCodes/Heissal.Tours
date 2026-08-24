@@ -219,3 +219,78 @@ def test_a_shared_price_heading_blocks_an_invented_occupancy():
     # An ordinary heading is left alone.
     assert _ambiguous_columns(["Single", "Double", "Triple"], 3) == set()
     assert _ambiguous_columns(["Standard Room", "", "Superior Room"], 3) == set()
+
+
+@pytest.mark.parametrize(
+    ("text", "start", "end"),
+    [
+        # Prose season definitions, as several sheets write them.
+        ("6th January - 28th February", date(2026, 1, 6), date(2026, 2, 28)),
+        ("3rd April - 6th April", date(2026, 4, 3), date(2026, 4, 6)),
+        ("1st March - 2nd April", date(2026, 3, 1), date(2026, 4, 2)),
+        # Turtle Bay states a bare two-digit year.
+        ("4 Jan - 30 April 26", date(2026, 1, 4), date(2026, 4, 30)),
+        ("1 May - 20 July 26", date(2026, 5, 1), date(2026, 7, 20)),
+    ],
+)
+def test_ordinal_and_bare_year_date_forms(text, start, end):
+    assert parse_date_range(text, default_year=2026) == (start, end)
+
+
+def test_the_document_year_is_the_commonest_not_the_earliest():
+    """Real sheets carry stray years that would misdate every season.
+
+    The Medina Palms 2026 contract has a "MAY 2025" revision stamp, and the
+    Swahili Beach 2026 contract mentions 2025 twice against 2026 a hundred and
+    seventeen times. Taking the earliest year dated their seasons a year early,
+    and the dates still looked entirely plausible.
+    """
+    from app.modules.supplier_docs.parsing import document_year
+
+    assert document_year("MAY 2025 " + "2026 " * 6 + "2027 2027 2025") == 2026
+    # A tie goes to the earlier year: a season spanning two years starts in it.
+    assert document_year("2027 2028") == 2027
+    assert document_year("no years here") is None
+    # A price is not a year.
+    assert document_year("rate 2026 for 28,400") == 2026
+
+
+def test_prose_season_definitions_are_collected_with_every_window():
+    """Medina Palms defines its seasons in a sentence, with several windows each.
+
+    All windows are returned rather than the first, because a rate labelled only
+    "High Season" belongs to all of them, and silently picking one would attach
+    it to part of its real season.
+    """
+    from app.modules.supplier_docs.parsing import season_windows
+
+    text = (
+        "SEASONS: DATES:\n"
+        "High Season 6th January - 28th February; 3rd April - 6th April\n"
+        "Green Season 1st March - 2nd April; 7th April - 31st July\n"
+        "Peak Season 27th December 2026 - 5th January 2027\n"
+    )
+    found = season_windows(text, default_year=2026)
+    assert found["High"] == [
+        (date(2026, 1, 6), date(2026, 2, 28)),
+        (date(2026, 4, 3), date(2026, 4, 6)),
+    ]
+    assert len(found["Green"]) == 2
+    # An explicitly dated window keeps its own years, not the document default.
+    assert found["Peak"] == [(date(2026, 12, 27), date(2027, 1, 5))]
+
+
+def test_a_fragmented_line_is_skipped_rather_than_misread():
+    """Some sheets extract one character at a time: "1 4 , 5 0 0" for 14,500.
+
+    Taken at face value those fragments become nightly rates of 1 and 4.
+    Recombining them would be inventing money, so the line is dropped.
+    """
+    from app.modules.supplier_docs.blocks import _is_fragmented
+
+    fragmented = [{"text": c} for c in "14,500"] + [{"text": x} for x in ("1", "4")]
+    assert _is_fragmented(fragmented) is True
+    intact = [{"text": t} for t in ("Club", "13,500", "13,100", "11,000", "10,600", "9,900")]
+    assert _is_fragmented(intact) is False
+    # Too short to judge.
+    assert _is_fragmented([{"text": "a"}, {"text": "b"}]) is False
