@@ -113,7 +113,9 @@ async def test_fx_convert_requires_permission(client):
     assert r.status_code == 401
 
 
-async def test_pricing_config_get_and_update_roundtrip(client, admin_tokens):
+async def test_pricing_config_get_and_update_roundtrip(
+    client, admin_tokens, restore_pricing_config
+):
     h = await _auth(admin_tokens)
     # GET always returns a valid config (defaults if never saved).
     r = await client.get(f"{API}/pricing-config", headers=h)
@@ -137,7 +139,9 @@ async def test_pricing_config_get_and_update_roundtrip(client, admin_tokens):
     assert again.json()["quote_validity_days"] == 21
 
 
-async def test_pricing_config_rejects_invalid(client, admin_tokens):
+async def test_pricing_config_rejects_invalid(
+    client, admin_tokens, restore_pricing_config
+):
     h = await _auth(admin_tokens)
     r = await client.patch(
         f"{API}/pricing-config",

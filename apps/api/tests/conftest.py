@@ -60,6 +60,30 @@ async def sample_catalogue() -> dict[str, Any]:
         return await seed_demo(db)
 
 
+@pytest_asyncio.fixture(loop_scope="session")
+async def restore_pricing_config(
+    client: AsyncClient, admin_tokens: dict[str, str]
+) -> AsyncGenerator[None, None]:
+    """Snapshot the pricing config and put it back afterwards.
+
+    The config is ONE row in ``app_settings``, so a test that PATCHes it changes
+    global state for every test that runs later. That is exactly what happened:
+    a config round-trip test set ``default_tax_pct`` to 16 and left it there, so
+    the engine tests — which assert against the default of 0 — started computing
+    4930 where they expected 4250. The failure looked like a pricing bug and was
+    a test-isolation bug, and it only surfaced once the whole suite ran in one go.
+
+    Any test that mutates the config must depend on this fixture.
+    """
+    url = f"{settings.API_V1_STR}/pricing-config"
+    headers = auth_headers(admin_tokens)
+    before = (await client.get(url, headers=headers)).json()
+    try:
+        yield
+    finally:
+        await client.patch(url, headers=headers, json=before)
+
+
 def unique_email(prefix: str = "user") -> str:
     return f"{prefix}+{uuid.uuid4().hex[:10]}@heissaltest.com"
 
