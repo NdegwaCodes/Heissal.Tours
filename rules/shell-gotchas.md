@@ -60,3 +60,34 @@ to `ap-southeast-2`), so the 10-test edge file takes ~17 minutes. Background the
 `--autogenerate` silently drops some constructs (notably inline `use_alter` for circular
 FKs — the `quotes.current_version_id` ↔ `quote_versions` pair had to be added post-table by
 hand). Always run `alembic check` and read the generated migration before committing it.
+
+## Passing Python (or any code) through a shell heredoc corrupts backslash escapes
+
+Three separate faults in one session, all from the same cause: text written into a
+`python - <<'PYEOF'` heredoc is decoded by Python as a **string literal**, so any
+valid Python escape sequence in it is interpreted before the code runs.
+
+| Written | What reached the file | Effect |
+|---|---|---|
+| `re.compile(r"\b(20[2-3]\d)\b")` | `\x08(20[2-3]\d)\x08` | Regex required literal **backspace** characters and silently never matched |
+| `re.search(r"\b(SGL\|DBL)\b", …)` | `^H(SGL\|DBL)^H` | Same — ambiguity detection quietly did nothing |
+| Em dash in a doc string | `â€"` | Mojibake, because stdin was decoded as cp1252 |
+
+`\d` survives (it is not a valid Python escape, so it passes through) which makes this
+worse: the pattern *looks* fine and half of it works.
+
+Rules:
+
+1. **Write files with the Write tool**, not a heredoc, whenever the content contains
+   backslashes, quotes, apostrophes or non-ASCII text.
+2. If a heredoc is unavoidable, prefer escapes that have no Python meaning: use
+   `(?<![0-9])…(?![0-9])` instead of `\b`, and double every backslash you actually want
+   (`\b`).
+3. Always run `PYTHONUTF8=1` when piping Python via stdin, or non-ASCII becomes mojibake.
+4. **Verify after writing**, because these fail silently. Check the bytes, not the
+   rendering:
+   ```bash
+   grep -n 'pattern' file.py | cat -v          # a literal ^H is a corrupted \b
+   python -c "import m; print(m._RE.pattern.encode())"
+   ```
+   `cat -v` renders control characters; a plain `grep` or an editor will not show them.

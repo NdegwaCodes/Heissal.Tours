@@ -58,6 +58,14 @@ class Settings(BaseSettings):
     FIRST_SUPERUSER_PASSWORD: str = "ChangeMe123!"
     FIRST_SUPERUSER_NAME: str = "Platform Admin"
 
+    # --- Uploaded files (supplier rate sheets, property images) ---
+    # Bytes live on the filesystem, not in Postgres (see the decision log): a
+    # 10 MB scanned contract in a row makes every query that touches the table
+    # pay for it. Relative paths are resolved against the API app directory so a
+    # default deployment needs no configuration.
+    UPLOAD_ROOT: str = "var/uploads"
+    MAX_UPLOAD_BYTES: int = 25 * 1024 * 1024
+
     @field_validator("BACKEND_CORS_ORIGINS", mode="before")
     @classmethod
     def _split_cors(cls, v: object) -> object:

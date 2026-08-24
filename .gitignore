@@ -52,3 +52,9 @@ Thumbs.db
 
 # --- Git bundles (delivery artifacts; commits already live in history) ---
 *.bundle
+
+# Uploaded files (supplier rate sheets, property images). Bytes live on disk and
+# only their metadata goes in Postgres. Supplier contract rates are confidential
+# and must never enter git history.
+apps/api/var/
+var/uploads/

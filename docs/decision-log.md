@@ -196,3 +196,38 @@ recorded in `quote_rejected_candidates` and printed on the document with its rea
 same mechanism the reference quotation uses for Diani Cottages and its 16-guest cap. That
 makes rejection reasons client-facing text by definition, so a commercial reason (margin,
 supplier relations) must never be written there.
+
+**Extraction proposes; only a person creates a rate** (Stage 3.2, 2026-08-24)
+Parsed rows land in `supplier_document_extractions` as proposals and only the confirm
+endpoint writes to `accommodation_rates`. The reviewer can override every field, because a
+confirm screen that cannot correct a misread number teaches people to click through it,
+which removes the only safeguard the design has. The same suspicion applies to a vision
+model later: the seam makes no distinction between a parser and a model.
+
+**Uploads are content-addressed** (Stage 3.2, 2026-08-24)
+Files are stored under the SHA-256 of their bytes, which gives deduplication, integrity
+and path safety in one move: the stored name never derives from a user-supplied filename,
+so no upload can traverse out of the root. Re-uploading the same sheet for the same
+property is refused with a pointer to the existing review queue rather than creating a
+second queue for identical rates — the corpus already contains a file named "... - Copy.pdf".
+
+**pdfplumber rather than a pdftotext binary** (Stage 3.2, 2026-08-24)
+The approach was proven with Xpdf's `pdftotext -table`, which happened to be installed on
+one developer machine and would not exist on a deployment target. pdfplumber is a declared
+dependency and exposes word coordinates, so row reconstruction is ours to control rather
+than a side effect of someone else's layout heuristic.
+
+**A sheet the parser cannot read is reported, never treated as empty** (Stage 3.2, 2026-08-24)
+"No rates found" and "this document defeated the parser" are different facts, and conflating
+them silently loses a property's entire price list. An image-only scan sets
+`needs_other_provider`, an unrecognised layout says so, and the document is marked failed
+with the reason attached. Coverage today is 5 of 35 documents fully readable (design doc
+§5b), so this distinction is load-bearing rather than defensive.
+
+**Money and dates are refused rather than guessed** (Stage 3.2, 2026-08-24)
+Three concrete traps found in the real sheets drove this. Swahili Beach writes thousands
+with a dot ("23.920 KES"), so reading it as a decimal understates a rate a thousandfold
+while still looking plausible. Baobab puts prices immediately after a season label, and a
+permissive year pattern read the price 280 as the year 0280. A merged cell holding
+"280 370 500" would attach the single-occupancy price to every occupancy column. In each
+case the parser now returns nothing and the row goes to a human.

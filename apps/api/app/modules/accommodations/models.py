@@ -176,6 +176,10 @@ class AccommodationRate(UUIDPKMixin, TimestampMixin, Base):
     child_max_age: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
+# rack: the published price. sto: a sell-to-operator price, already an operator
+# rate. The kind decides how a stated discount is spent (see AccommodationRate).
+RATE_KINDS = ("rack", "sto")
+
 # A supplement's amount means nothing without knowing what it multiplies by.
 SUPPLEMENT_BASES = (
     "per_person_per_night",

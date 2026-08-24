@@ -414,6 +414,30 @@ Extraction is **never trusted silently**. A wrong parsed money value that reache
 client is a commercial incident, and OCR on designed images is exactly where that
 happens. The source file stays attached so any rate is traceable to its document.
 
+### 5b. What the deterministic parser actually reads (measured 2026-08-24)
+
+Measured by running `GridRateExtractor` over all 35 documents, with the uploader
+declaring currency and board basis as the confirm flow does:
+
+| Outcome | Documents | Complete candidate rows |
+|---|---|---|
+| Usable — produced confirmable rows | **5** | 644 |
+| Partial — prices and dates read, but a field missing on every row | 9 | 0 |
+| Recognised no rate grid at all | 18 | 0 |
+| Image-only scans (need the vision provider) | 3 | 0 |
+
+This is well short of "32 of 35 are machine-readable". A text layer is necessary but
+not sufficient: the parser handles the shape where **occupancy is a column and the
+season window is a row** (both Swahili Beach contracts, both Baobab sheets,
+Hemmingways), and the other layouts need work it has not had yet. The largest known
+gap is the **transposed** shape, where meal plans are the columns and occupancy is the
+row label — Temple Point is the clearest example and currently yields nothing.
+
+The pipeline is nonetheless complete and useful: a sheet the parser cannot read is
+reported as unrecognised rather than as empty, and rates for it are entered by hand
+against the stored document. Coverage improves by teaching the parser more shapes,
+which does not change the ingestion contract.
+
 ### 5a. The real corpus (surveyed 2026-08-24)
 
 `H:\Tours\Hotel Prices` — 35 PDFs covering roughly 24 properties, all 2026/27 or
@@ -445,9 +469,10 @@ positions rather than shelling out to a binary that happens to be installed.
 
 Consequences for the pipeline:
 
-- The deterministic parser is the primary path (32/35); vision/OCR is the **fallback**
-  for the three scans, behind the same provider seam. Not the reverse — that ordering
-  is what keeps per-document cost near zero.
+- The deterministic parser is the primary path and vision/OCR is the **fallback**,
+  behind the same provider seam. Not the reverse — that ordering keeps per-document
+  cost near zero for the documents it does handle. But see §5b: it reads far fewer of
+  them today than "has a text layer" suggested.
 - Residence category is a property of the **document**, so the confirm screen asks for
   it once per upload rather than per row.
 - The discount percentage is often only in the **filename** ("15% Commission to us"),
@@ -548,7 +573,10 @@ ask "what did we quote in June and what did it become" without a data warehouse.
 - **3.1b** Occupancy as part of rate identity, `accommodation_supplements`, seeded
   contract FX rate — *done*. Forced by the real corpus: without it 26 of 32 sheets
   could not be stored and every December quote under-charged.
-- **3.2** Rate ingestion: upload → extract → confirm screen → stored rates
+- **3.2** Rate ingestion: upload → extract → confirm → stored rates — *done*.
+  Content-addressed storage, a provider seam, a deterministic grid parser, and a
+  confirm step that is the only path able to create a rate. Parser coverage is
+  partial (§5b) and improves without changing the contract.
 - **3.3** Option pricing: cheapest-within-hotel, meal fallback chain, rooming rule,
   discount/STO handling, contingency + profit, per-person rounding
 - **3.4** Multi-option quote assembly + recommendation + rejected candidates

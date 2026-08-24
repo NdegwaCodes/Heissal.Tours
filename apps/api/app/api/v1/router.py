@@ -16,6 +16,7 @@ from app.modules.pricing.router import router as pricing_router
 from app.modules.quotes.router import router as quotes_router
 from app.modules.rbac.router import router as rbac_router
 from app.modules.residence.router import router as residence_router
+from app.modules.supplier_docs.router import router as supplier_docs_router
 from app.modules.suppliers.router import router as suppliers_router
 from app.modules.users.router import router as users_router
 from app.modules.vehicles.router import fuel_router
@@ -37,6 +38,7 @@ api_router.include_router(activities_router)
 api_router.include_router(vehicles_router)
 api_router.include_router(fuel_router)
 api_router.include_router(pricing_router)
+api_router.include_router(supplier_docs_router)
 # Stage 2 — quote domain
 api_router.include_router(clients_router)
 api_router.include_router(quotes_router)

@@ -17,6 +17,11 @@ dependencies = [
     "redis>=5.0.0",
     "python-multipart>=0.0.9",
     "email-validator>=2.1.0",
+    # Reads the table grid of text-layer supplier rate sheets. Chosen over
+    # shelling out to a pdftotext binary so the dependency is declared and
+    # present on every deployment, and because it exposes word coordinates:
+    # line-based extraction misaligns these sheets silently.
+    "pdfplumber>=0.11",
 ]
 
 [dependency-groups]

@@ -47,6 +47,9 @@ PERMISSIONS: dict[str, str] = {
     "activity:manage": "Manage activities and activity rates",
     "vehicle:read": "View vehicles and fuel prices",
     "vehicle:manage": "Manage vehicles and fuel prices",
+    "supplier_doc:read": "View uploaded supplier rate sheets and their proposed rows",
+    "supplier_doc:manage": "Upload supplier rate sheets and run extraction",
+    "supplier_doc:confirm": "Confirm extracted rows into stored rates",
     "pricing:read": "View pricing configuration (markup/discount/tax defaults)",
     "pricing:manage": "Manage pricing configuration (markup/discount/tax defaults)",
     # --- Stage 2.7: clients + quote domain ---
