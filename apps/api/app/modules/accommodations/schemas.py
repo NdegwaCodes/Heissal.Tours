@@ -3,8 +3,11 @@ from __future__ import annotations
 import uuid
 from datetime import date, datetime
 from decimal import Decimal
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
+
+from app.core.vat import DEFAULT_VAT_PCT
 
 
 # --- Meal plans ---
@@ -98,6 +101,21 @@ class AccommodationRateCreate(BaseModel):
     single_supplement: Decimal | None = Field(default=None, ge=0)
     min_nights: int | None = None
     is_active: bool = True
+    # Occupancy is part of a rate's identity (§3.3) — the same room is a
+    # different price for one guest and for two — and it is in the uniqueness
+    # key. Without it here a typed-in property could only ever hold one rate per
+    # room/plan/residence/season, which is not how any real sheet is shaped.
+    occupancy: int = Field(default=2, ge=1, le=20)
+    # Stage 3 provenance. Defaults match the corpus (an inclusive rack rate with
+    # no stated concession), so an existing caller keeps working unchanged.
+    rate_kind: Literal["rack", "sto"] = "rack"
+    supplier_discount_pct: Decimal | None = Field(default=None, ge=0, le=100)
+    # What the *source* quoted. An exclusive figure is grossed up on the way in
+    # and stored inclusive (§3.2), so this is an input, not the stored state.
+    vat_inclusive: bool = True
+    vat_pct: Decimal = Field(default=DEFAULT_VAT_PCT, ge=0, le=100)
+    child_min_age: int | None = Field(default=None, ge=0, le=17)
+    child_max_age: int | None = Field(default=None, ge=0, le=17)
 
 
 class AccommodationRateRead(BaseModel):
@@ -116,3 +134,11 @@ class AccommodationRateRead(BaseModel):
     single_supplement: Decimal | None
     min_nights: int | None
     is_active: bool
+    occupancy: int
+    rate_kind: str
+    supplier_discount_pct: Decimal | None
+    vat_inclusive: bool
+    vat_pct: Decimal
+    child_min_age: int | None
+    child_max_age: int | None
+    source_document_id: uuid.UUID | None

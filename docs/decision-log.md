@@ -469,3 +469,44 @@ dark rectangle with a caption on it. The format check runs before the decode so 
 matches the mistake: a PDF in an image slot is told it is the wrong format, not that it failed
 to decode. Width and height fall out of the same decode, so those columns stop being
 permanently NULL.
+
+**VAT is normalised at ingestion, and the column records provenance rather than state**
+(Stage 3.7, 2026-08-25)
+§3.2 has said since the design was written that stored rates are always VAT-inclusive and
+that an exclusive source is grossed up ×1.16 on the way in. The code stored what it was
+given and set `vat_inclusive` to match, so a sheet marked exclusive was kept exclusive —
+and because the engine deliberately adds no tax anywhere, nothing downstream ever made up
+the difference. Every quote off such a sheet under-charged by the whole VAT rate while the
+document told the client the price included it. The gross-up now happens once, in
+`app/core/vat.py`, at both doors a rate can arrive by (a confirmed supplier document and a
+hand-entered rate), and the stored `vat_inclusive` is true by construction. Normalising at
+write time rather than read time is the point: a gross-up applied at pricing time is a rule
+five call sites have to remember, and the failure when one forgets is a silent 16%
+under-charge. `to_vat_inclusive` is idempotent, so re-confirming a sheet cannot tax it twice.
+
+**Occupancy had to be on the manual rate schemas, not just the ingested ones**
+(Stage 3.7, 2026-08-25)
+3.1b put `occupancy` into the rate table and into its uniqueness key, and 3.2 exposed it on
+the ingestion confirm step — but the hand-entry create schema never gained it, along with
+`rate_kind`, `supplier_discount_pct` and the VAT basis. The read schema omitted them too, so
+the admin could not even see which occupancy a rate belonged to. The practical effect was
+that a property typed in by hand could hold exactly one rate per room/plan/residence/season
+and could therefore never be priced for a lone guest — the ordinary odd-room case. Found by
+writing 3.7's VAT tests and discovering there was no way to submit a VAT basis at all.
+
+**A deduplicated upload still applies its flags** (Stage 3.7, 2026-08-25)
+Content-addressed storage returns the existing row when the same photograph is uploaded
+again, which is right — a gallery upload of five files where two repeat should not
+half-fail. But returning it *untouched* made "I already uploaded this, now make it the
+cover" a silent no-op: 201, the correct row, and nothing changed. Flags from the repeat
+upload are now applied, and only `True` promotes: an upload that says nothing about the hero
+is not asking to demote the current one either.
+
+**Test fixtures must not produce identical bytes across runs** (Stage 3.7, 2026-08-25)
+The image fixtures used a fixed palette, so a second run against the same throwaway database
+deduplicated onto the *previous* run's rows and inherited whatever hero flag they had ended
+up with. Two document tests passed on a fresh database and failed on a re-run — the kind of
+flake that gets a test deleted rather than fixed. Each generated PNG now carries a nonce in
+its metadata, so the pixels an assertion looks at are unchanged and the bytes are unique. The
+suite now passes twice in a row against a dirty database, which is the actual property worth
+having.

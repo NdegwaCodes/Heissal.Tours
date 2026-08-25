@@ -16,6 +16,7 @@ from decimal import Decimal
 
 import pytest
 from PIL import Image
+from PIL.PngImagePlugin import PngInfo
 
 from app.core.config import settings
 from tests.conftest import unique_email
@@ -29,9 +30,23 @@ def _h(tokens):
 
 
 def png_bytes(colour: tuple[int, int, int] = (32, 64, 96), size=(8, 6)) -> bytes:
-    """A tiny real PNG. Distinct colours make two uploads distinct files."""
+    """A tiny real PNG, unique to this call.
+
+    Uniqueness matters because uploads are content-addressed: bytes identical to
+    something already stored return the existing row rather than a new one. With
+    a fixed palette, a second run against the same throwaway database found the
+    *previous* run's images, inherited whatever hero flag they had ended up with,
+    and failed — a suite that only passes on a freshly created database, which is
+    the kind of flake that gets tests deleted rather than fixed.
+
+    The nonce is metadata, so the pixels a test asserts on are unaffected. A test
+    that deliberately needs two identical uploads calls this once and reuses the
+    value.
+    """
     buffer = io.BytesIO()
-    Image.new("RGB", size, colour).save(buffer, format="PNG")
+    info = PngInfo()
+    info.add_text("nonce", uuid.uuid4().hex)
+    Image.new("RGB", size, colour).save(buffer, format="PNG", pnginfo=info)
     return buffer.getvalue()
 
 
@@ -122,6 +137,59 @@ async def test_the_same_photograph_uploaded_twice_is_one_row(
     assert first.status_code == 201, first.text
     assert second.status_code == 201, second.text
     assert first.json()["id"] == second.json()["id"]
+
+
+async def test_re_uploading_a_photograph_can_still_make_it_the_hero(
+    client, admin_tokens, sample_catalogue
+):
+    """A repeat upload is deduplicated, but its flags are not discarded.
+
+    Returning the existing row untouched made "I already uploaded this, now make
+    it the cover" a silent no-op: 201, the right row, and nothing changed.
+    """
+    h = _h(admin_tokens)
+    url = f"{API}/accommodations/{sample_catalogue['acc_bb_only']}/images"
+    content = png_bytes((21, 32, 43))
+    first = await client.post(
+        url, headers=h, files={"file": ("plain.png", content, "image/png")}
+    )
+    assert first.status_code == 201, first.text
+    assert first.json()["is_hero"] is False
+
+    again = await client.post(
+        url,
+        headers=h,
+        files={"file": ("plain.png", content, "image/png")},
+        data={"is_hero": "true", "alt_text": "Now the hero"},
+    )
+    assert again.status_code == 201, again.text
+    assert again.json()["id"] == first.json()["id"], "should still deduplicate"
+    assert again.json()["is_hero"] is True
+    assert again.json()["alt_text"] == "Now the hero"
+
+    listing = (await client.get(url, headers=h)).json()
+    assert sum(1 for image in listing if image["is_hero"]) == 1
+
+
+async def test_a_plain_repeat_upload_does_not_demote_the_current_hero(
+    client, admin_tokens, sample_catalogue
+):
+    """An upload that says nothing about the hero is not asking to unset one."""
+    h = _h(admin_tokens)
+    url = f"{API}/accommodations/{sample_catalogue['acc_min_stay']}/images"
+    content = png_bytes((90, 91, 92))
+    hero = await client.post(
+        url,
+        headers=h,
+        files={"file": ("hero.png", content, "image/png")},
+        data={"is_hero": "true"},
+    )
+    assert hero.status_code == 201, hero.text
+    again = await client.post(
+        url, headers=h, files={"file": ("hero.png", content, "image/png")}
+    )
+    assert again.status_code == 201, again.text
+    assert again.json()["is_hero"] is True
 
 
 async def test_only_one_image_is_the_hero(client, admin_tokens, sample_catalogue):

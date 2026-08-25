@@ -4,17 +4,68 @@ from __future__ import annotations
 
 import uuid
 from datetime import date
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.errors import NotFoundError
+from app.core.errors import AppError, NotFoundError
+from app.core.vat import DEFAULT_VAT_PCT, to_vat_inclusive
 from app.modules.accommodations.models import AccommodationRate
 
 
 class AccommodationRateService:
     def __init__(self, db: AsyncSession):
         self.db = db
+
+    async def create_rate(
+        self, accommodation_id: uuid.UUID, data: dict[str, Any]
+    ) -> AccommodationRate:
+        """Store one hand-entered rate, VAT-normalised.
+
+        A typed-in rate goes through the same §3.2 normalisation as an ingested
+        one: whoever is reading a sheet into the admin form is looking at the same
+        "rates exclusive of VAT" footnote a parser would, and the invariant is
+        that *stored* rates are inclusive regardless of which door they came
+        through. ``vat_inclusive`` on the way in describes the source; on the row
+        it is always true.
+        """
+        if data["effective_to"] < data["effective_from"]:
+            raise AppError("effective_to must be on or after effective_from.")
+        if (
+            data.get("child_min_age") is not None
+            and data.get("child_max_age") is not None
+            and data["child_max_age"] < data["child_min_age"]
+        ):
+            raise AppError("child_max_age must be greater than or equal to child_min_age.")
+
+        vat_pct = data.pop("vat_pct", DEFAULT_VAT_PCT)
+        stated_inclusive = data.pop("vat_inclusive", True)
+        data["rate_per_night"] = to_vat_inclusive(
+            data["rate_per_night"], vat_inclusive=stated_inclusive, vat_pct=vat_pct
+        )
+        if data.get("child_rate") is not None:
+            data["child_rate"] = to_vat_inclusive(
+                data["child_rate"], vat_inclusive=stated_inclusive, vat_pct=vat_pct
+            )
+        if data.get("single_supplement") is not None:
+            data["single_supplement"] = to_vat_inclusive(
+                data["single_supplement"],
+                vat_inclusive=stated_inclusive,
+                vat_pct=vat_pct,
+            )
+        data["currency"] = str(data["currency"]).upper()
+
+        rate = AccommodationRate(
+            accommodation_id=accommodation_id,
+            vat_inclusive=True,
+            vat_pct=vat_pct,
+            **data,
+        )
+        self.db.add(rate)
+        await self.db.commit()
+        await self.db.refresh(rate)
+        return rate
 
     async def select_rate(
         self,

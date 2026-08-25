@@ -76,7 +76,20 @@ class MediaService:
             # The same photograph, uploaded again. Returning the row already
             # there beats a 409: the caller's intent is satisfied, and a gallery
             # upload of five files where two are repeats should not half-fail.
-            return existing
+            #
+            # The flags that came with this upload are still applied, though.
+            # Returning the row untouched made re-uploading a photograph you
+            # already had with "hero" ticked a silent no-op — no error, no new
+            # hero, and nothing to tell the editor why the cover did not change.
+            return await self._apply_flags(
+                existing,
+                PropertyImage,
+                PropertyImage.accommodation_id == accommodation_id,
+                flag="is_hero",
+                set_flag=is_hero,
+                alt_text=alt_text,
+                sort_order=sort_order,
+            )
 
         highest = await self._highest_sort(
             PropertyImage, PropertyImage.accommodation_id == accommodation_id
@@ -146,7 +159,15 @@ class MediaService:
             )
         ).scalar_one_or_none()
         if existing is not None:
-            return existing
+            return await self._apply_flags(
+                existing,
+                DestinationImage,
+                DestinationImage.destination_id == destination_id,
+                flag="is_cover",
+                set_flag=is_cover,
+                alt_text=alt_text,
+                sort_order=sort_order,
+            )
 
         highest = await self._highest_sort(
             DestinationImage, DestinationImage.destination_id == destination_id
@@ -207,6 +228,33 @@ class MediaService:
     async def delete_destination_image(self, image_id: uuid.UUID) -> None:
         await self.db.delete(await self.get_destination_image(image_id))
         await self.db.commit()
+
+    async def _apply_flags(
+        self,
+        image: Any,
+        model: Any,
+        where: Any,
+        *,
+        flag: str,
+        set_flag: bool,
+        alt_text: str | None,
+        sort_order: int | None,
+    ) -> Any:
+        """Update an existing row with what a repeat upload asked for.
+
+        Only ``True`` promotes: an upload that did not ask to be the hero is not
+        asking to demote the current one either, and treating a default ``False``
+        as a demotion would let a plain gallery upload silently unset the cover.
+        """
+        if alt_text:
+            image.alt_text = alt_text
+        if sort_order is not None:
+            image.sort_order = sort_order
+        if set_flag:
+            setattr(image, flag, True)
+            await self._make_sole_flag(model, where, flag, image.id)
+        await self.db.commit()
+        return image
 
     @staticmethod
     def _dimensions(content: bytes, content_type: str) -> tuple[int, int]:

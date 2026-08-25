@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import AppError, ConflictError, NotFoundError
 from app.core.storage import save_bytes
+from app.core.vat import DEFAULT_VAT_PCT, to_vat_inclusive
 from app.integrations.rate_extraction import (
     ExtractedRateRow,
     ExtractionHint,
@@ -419,6 +420,15 @@ class IngestionService:
         if not currency:
             raise AppError("Set the currency: the sheet does not state one.")
 
+        # Normalise to VAT-inclusive here, once (§3.2). Storing an exclusive
+        # figure would under-charge by the whole VAT rate, because the engine
+        # adds no tax downstream and the document still tells the client the
+        # price includes it. The basis is recorded on the row so the stored
+        # number remains reconcilable against the sheet it came from.
+        vat_pct = DEFAULT_VAT_PCT if decision.vat_pct is None else decision.vat_pct
+        stated_inclusive = True if decision.vat_inclusive is None else decision.vat_inclusive
+        amount = to_vat_inclusive(amount, vat_inclusive=stated_inclusive, vat_pct=vat_pct)
+
         start = decision.effective_from or _as_date(proposed.get("effective_from"))
         end = decision.effective_to or _as_date(proposed.get("effective_to"))
         if start is None or end is None:
@@ -469,8 +479,10 @@ class IngestionService:
             child_max_age=decision.child_max_age,
             rate_kind=decision.rate_kind or "rack",
             supplier_discount_pct=decision.supplier_discount_pct,
-            vat_inclusive=True if decision.vat_inclusive is None else decision.vat_inclusive,
-            vat_pct=Decimal("16") if decision.vat_pct is None else decision.vat_pct,
+            # Always true by construction: the amount above was grossed up if it
+            # was not. What the sheet *said* is preserved in the extraction row.
+            vat_inclusive=True,
+            vat_pct=vat_pct,
             source_document_id=doc.id,
         )
 

@@ -64,6 +64,23 @@ the PDF renderer must use the **client** schema, never the internal one.
   documents state the tax basis explicitly and all of them are inclusive — Temple Point
   is typical: "Rates are per room per night, in KSH & inclusive of all taxes." The
   inclusive default is therefore the common case, not an assumption.
+- **Implemented 2026-08-25 (Stage 3.7), having been documented and not built.** The rule
+  above was stated from the start; the code stored whatever it was given and set
+  `vat_inclusive` to match. Since nothing downstream adds tax, a sheet marked exclusive
+  under-charged by the whole VAT rate while the document still told the client the price
+  included it. Normalisation is now a single pure function, `app.core.vat.to_vat_inclusive`,
+  applied **at write time** at both doors a rate can arrive by — a confirmed supplier
+  document and a hand-entered rate — so:
+  - `vat_inclusive` on a stored row is true by construction. It is **provenance**, not a
+    flag any reader has to act on; the basis the source stated is what the input carried.
+  - `vat_pct` is the rate the row was normalised at, so a VAT change or a zero-rated
+    supplier needs no code change.
+  - The function is idempotent, which is what stops a re-confirmed sheet being taxed twice.
+  - Write time rather than read time on purpose: pricing reads rates from five places, and
+    a gross-up applied at read time is a rule five call sites must remember whose failure
+    mode is a silent under-charge. Applied on the way in, it is a property of the data.
+  - Every money column on a rate shares one basis — the child rate and the single
+    supplement are grossed up with the nightly rate, never left behind on the other one.
 
 ### 3.3 Rooming
 
@@ -767,3 +784,35 @@ ask "what did we quote in June and what did it become" without a data warehouse.
 - **3.6** PDF generation, quote number, validity
 - **3.7** Correctness tests: the sample reproduced end to end, VAT normalisation,
   discount halving, rooming edge cases (odd pax, capacity-4), fallback chain
+
+---
+
+## 11. What 3.7 actually tests (2026-08-25)
+
+The milestone list above names five things. How each is covered, and where:
+
+| Rule | Where | Shape |
+|---|---|---|
+| VAT normalisation (§3.2) | `tests/test_vat.py`, `tests/test_stage3_correctness.py` | pure function incl. idempotence and a rate sweep; then both write doors, and a check that pricing adds no tax on top |
+| Discount halving (§3.5) | `tests/test_option_rules.py` | swept over `None, 0, 7.5, 10, 15, 33.333, 100` — the three-number identity, `paid ≤ costed ≤ rack`, and STO exempt |
+| Rooming (§3.3) | `tests/test_option_rules.py`, `tests/test_stage3_correctness.py` | every pax 1–40 × capacity 1–6: nobody lost or invented, no room overfilled, at most one short room; then 25-in-twins and 25-in-villas priced through the service |
+| Fallback chain (§3.4) | both files | that half board is preferred to bed and breakfast, and that the middle step takes no chef |
+| The sample end to end | `tests/test_stage3_correctness.py` | quote → price → issue → client read → internal read → rendered HTML, asserting the figures agree at every layer |
+
+Two things are asserted there that are worth naming separately, because they are about the
+document being safe rather than correct:
+
+- **No internal figure reaches the page.** Checked against the rendered bytes with thousands
+  separators stripped, so a figure cannot hide behind formatting.
+- **No internal *word* reaches the page.** "Contingency" on a client document invites a
+  question no agent wants to answer, even with no number beside it. Checked against the
+  visible text with stylesheets and markup removed — the first version of that assertion
+  failed on the `margin` in the page's own CSS, which is how a useful check gets deleted
+  instead of fixed.
+
+Deliberately **not** asserted: the reference PDF's own figures. Its page 6 and page 11
+contradict each other (28,800 vs 28,400 per person against one 720,000 total, §3.6), so
+reproducing it number-for-number would mean reproducing an arithmetic error. What is
+reproduced is its **shape** — a 25-pax group, several options at different board bases, one
+recommended, one property declined with a printed reason — against seeded rates whose
+expected results are worked by hand.

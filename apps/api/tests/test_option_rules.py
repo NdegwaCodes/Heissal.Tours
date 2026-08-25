@@ -7,8 +7,10 @@ in a real supplier sheet, that figure is used rather than a made-up one.
 
 from __future__ import annotations
 
+import math
 from datetime import date
 from decimal import Decimal
+from itertools import product
 
 import pytest
 
@@ -537,3 +539,116 @@ def test_all_adults_is_uniform():
 
 def test_an_adult_and_a_child_is_not_uniform():
     assert uniform_group(["adult", "child"]) is False
+
+
+# --------------------------------------------------------------------------- #
+# Stage 3.7 sweeps — the invariants, rather than one example each
+#
+# The tests above assert the design doc's worked figures. These assert the
+# properties those figures are instances of, across a range wide enough to
+# include the edges: 0% and 100% discounts, percentages that do not divide
+# cleanly, and every headcount-and-capacity pair up to a 40-person group.
+# --------------------------------------------------------------------------- #
+
+_PERCENTAGES = [None, D("0"), D("7.5"), D("10"), D("15"), D("33.333"), D("100")]
+
+
+@pytest.mark.parametrize("pct", _PERCENTAGES)
+def test_the_client_is_never_costed_below_what_the_hotel_is_paid(pct):
+    rack = D("24000")
+    paid = supplier_paid(rack, pct)
+    costed = costed_rate(rack, pct, "rack")
+    assert paid <= costed <= rack
+
+
+@pytest.mark.parametrize("pct", _PERCENTAGES)
+def test_the_retained_half_is_exactly_the_difference(pct):
+    rack = D("24000")
+    kept = retained_discount(rack, pct, "rack")
+    assert kept == costed_rate(rack, pct, "rack") - supplier_paid(rack, pct)
+    assert kept >= 0
+
+
+@pytest.mark.parametrize("pct", _PERCENTAGES)
+def test_the_client_gets_exactly_half_the_concession(pct):
+    """Half, not "about half": the sheet's percentage is halved, not the money
+    rounded to something convenient."""
+    rack = D("24000")
+    if pct is None or pct == 0:
+        assert costed_rate(rack, pct, "rack") == rack
+        return
+    whole = rack - supplier_paid(rack, pct)
+    passed_on = rack - costed_rate(rack, pct, "rack")
+    assert passed_on * 2 == whole
+
+
+@pytest.mark.parametrize("pct", _PERCENTAGES)
+def test_an_sto_sheet_keeps_nothing_back(pct):
+    """An STO rate is already an operator rate; halving it a second time would
+    quote the client above a price that was never rack."""
+    rack = D("24000")
+    assert costed_rate(rack, pct, "sto") == supplier_paid(rack, pct)
+    assert retained_discount(rack, pct, "sto") == 0
+
+
+def test_a_hundred_percent_discount_costs_the_client_half_the_rack_rate():
+    """Not a realistic sheet, but the arithmetic must not invert or go negative."""
+    assert supplier_paid(D("24000"), D("100")) == 0
+    assert costed_rate(D("24000"), D("100"), "rack") == D("12000")
+    assert retained_discount(D("24000"), D("100"), "rack") == D("12000")
+
+
+@pytest.mark.parametrize("pax,capacity", list(product(range(1, 41), range(1, 7))))
+def test_every_guest_gets_a_bed_and_no_room_is_overfilled(pax, capacity):
+    plan = room_plan(pax, capacity)
+    assert sum(plan) == pax, "a guest was lost or invented"
+    assert all(0 < occupants <= capacity for occupants in plan)
+    assert len(plan) == rooms_required(pax, capacity) == math.ceil(pax / capacity)
+    # At most one room is short: rooms are filled before another is opened.
+    assert len([n for n in plan if n < capacity]) <= 1
+
+
+def test_twenty_five_in_twins_is_twelve_doubles_and_a_single():
+    assert rooms_required(25, 2) == 13
+    assert room_plan(25, 2) == [2] * 12 + [1]
+
+
+def test_twenty_five_in_four_guest_villas_is_seven_units():
+    """The capacity-4 case. Six full villas and one holding the last guest."""
+    assert rooms_required(25, 4) == 7
+    assert room_plan(25, 4) == [4] * 6 + [1]
+
+
+def test_an_exact_multiple_opens_no_extra_room():
+    assert room_plan(24, 4) == [4] * 6
+    assert rooms_required(24, 4) == 6
+
+
+def test_a_lone_guest_takes_one_room_however_large():
+    assert room_plan(1, 4) == [1]
+    assert rooms_required(1, 4) == 1
+
+
+def test_a_group_smaller_than_one_room_still_books_the_room():
+    assert room_plan(3, 4) == [3]
+
+
+def test_half_board_is_preferred_to_bed_and_breakfast():
+    plan, fell_back = resolve_meal_plan("FB", {"HB", "BB"})
+    assert (plan, fell_back) == ("HB", True)
+
+
+def test_the_requested_plan_wins_when_it_exists():
+    plan, fell_back = resolve_meal_plan("FB", {"FB", "HB", "BB"})
+    assert (plan, fell_back) == ("FB", False)
+
+
+def test_bed_and_breakfast_is_the_end_of_the_chain():
+    plan, fell_back = resolve_meal_plan("FB", {"BB"})
+    assert (plan, fell_back) == ("BB", True)
+
+
+def test_nothing_available_is_not_a_silent_choice():
+    assert resolve_meal_plan("FB", set()) == (None, False)
+
+

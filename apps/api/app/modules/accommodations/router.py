@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.crud import CRUDService, slugify
 from app.core.deps import require_permission
-from app.core.errors import AppError, NotFoundError
+from app.core.errors import NotFoundError
 from app.db.session import get_db
 from app.modules.accommodations.models import (
     Accommodation,
@@ -162,16 +162,10 @@ async def create_rate(
     db: AsyncSession = Depends(get_db),
     _=Depends(require_permission(MANAGE)),
 ):
-    if body.effective_to < body.effective_from:
-        raise AppError("effective_to must be on or after effective_from.")
     await CRUDService(db, Accommodation).get(accommodation_id)  # 404 if missing
-    data = body.model_dump()
-    data["currency"] = body.currency.upper()
-    rate = AccommodationRate(accommodation_id=accommodation_id, **data)
-    db.add(rate)
-    await db.commit()
-    await db.refresh(rate)
-    return rate
+    return await AccommodationRateService(db).create_rate(
+        accommodation_id, body.model_dump()
+    )
 
 
 @router.get(
