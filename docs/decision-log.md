@@ -510,3 +510,51 @@ flake that gets a test deleted rather than fixed. Each generated PNG now carries
 its metadata, so the pixels an assertion looks at are unchanged and the bytes are unique. The
 suite now passes twice in a row against a dirty database, which is the actual property worth
 having.
+
+**Rooming cohorts and charging cohorts are different partitions** (Stage 3.8, 2026-08-25)
+Mixed groups need both, and applying either partition to the other job is expensive.
+**Rooms split by residency only**: a room is priced per room at one residency, so a resident
+and a non-resident cannot share one without leaving the room's rate undefined. **Charges
+split by residency and traveller type**: a child pays a child rate, but a child still sleeps
+in their parents' room — partition rooms by traveller type as well and a family of two adults
+and two children needs four rooms instead of one. The cost of per-residency rooming is the
+occasional extra room: three residents and three non-residents need four twins where six of
+one residency need three. The obvious examples hide this (25 people and 7 people give 13 and
+4 under either rule), which is why it is written down and has a test of its own.
+
+**A shared cost is split before it is converted** (Stage 3.8, 2026-08-25)
+A coach chartered for a mixed group is one amount in one currency whose per-head share has to
+land in two — shillings for the residents, dollars for the non-residents. The share is
+computed first, in the line's own currency, and only then converted. Splitting a converted
+total instead would give each cohort its own rounding of the exchange rate, so the same quote
+could price a cent differently between runs. Exact equality cannot survive a round trip
+through a non-terminating rate (15,000 ÷ 130), so the test asserts sub-cent drift rather than
+pretending otherwise.
+
+**Shared costs sum exactly, with the last cohort taking the remainder** (Stage 3.8,
+2026-08-25)
+Allocating a shared cost by exact division and accepting the drift would leave the cohort
+totals adding up to something other than the cost — and a document whose parts do not sum to
+its whole is the specific failure this design exists to remove. Which cohort absorbs the
+remainder is deterministic rather than arbitrary, so re-pricing cannot move a shilling
+between cohorts.
+
+**Per-person rounding is a real source of margin on a large group** (Stage 3.8, 2026-08-25)
+Rounding up to the nearest 100 is applied per person and then multiplied by the headcount, so
+the bound on a cohort is one rounding step *per traveller*, not per cohort. A 25-person
+booking can therefore carry up to 2,500 of rounding above cost. That is also the answer to
+"why is the total 447,500 when the cost is 447,237". Worth knowing deliberately rather than
+discovering during a reconciliation.
+
+**Accommodation arrives at the vector pre-totalled** (Stage 3.8, 2026-08-25)
+Every cost is an `(amount, currency, basis)` triple resolved against the group — except
+accommodation, which enters as a `per_group` figure already totalled for its residency. Rate
+selection across occupancies, seasons and room types is the pricing service's job, and
+re-deriving it inside the basis layer would mean two implementations of the same rule. The
+basis table is where a new charging shape gets taught; it is not a second rate engine.
+
+**`compute_park_fee` had no callers** (found 2026-08-25)
+Its docstring claimed the Stage 2.8 pricing engine reused it. Nothing in the codebase called
+it, so park and conservation fees were not merely absent from Stage 3's option build-up —
+they were computed nowhere at all. Recorded because the docstring was actively misleading:
+the gap looked like a Stage 3 omission and was system-wide.

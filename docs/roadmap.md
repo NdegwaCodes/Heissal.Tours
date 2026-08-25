@@ -64,6 +64,37 @@ six accommodation options) — supplied by the client and now the target output.
 - ☑ 3.6 PDF generation + quote number + validity — `GET /quotes/{id}/document.pdf` through a `PdfRenderProvider` seam with headless Chromium behind it, filename `HTQ-YYYY-NNNN-vN.pdf`, `?version=` and `?download=` supported. Photographs are inlined as data URIs in both the PDF and the HTML — the 3.5 gap was wider than a PDF problem, since a browser will not replay a bearer token for an `<img>` either. Not cached, and the reason is written down. A missing renderer and a broken one give different, actionable errors; the HTML document keeps working without a browser. Also added image decoding on upload, after a printed cover turned out to be alt text over a dark rectangle. 15 new tests, the strongest reading text back out of the produced PDF to prove no internal figure survives view model, template and browser
 - ☑ 3.7 Correctness tests — the reference proposal reproduced end to end, plus the four rules the design doc names for this milestone: VAT normalisation, discount halving, rooming edge cases and the meal-plan fallback chain. Sweeps for the invariants (every percentage from 0 to 100, every pax/capacity pair to 40 guests), hand-worked figures for the behaviour. **Found and fixed the VAT rule being documented but never implemented** — a sheet marked VAT-exclusive was stored as typed and nothing downstream ever grossed it up, so every quote off such a sheet under-charged by 16% while the document told the client the price included it. Normalisation now happens once at ingestion (`app/core/vat.py`), through both doors a rate can arrive by. Also exposed the Stage-3 rate fields the manual create/read schemas were missing — occupancy above all, which is part of a rate's uniqueness key, so a hand-entered property could hold only one rate per room/plan/season and could never be priced for a lone guest. Fixed a deduplicated image upload silently discarding its own flags, and a fixture whose fixed bytes made the suite pass only on a freshly created database. 87 new tests; 1430 passing
 
+## Stage 3B — Multi-destination, cohorts and transport  ◑ (scoped with the client 2026-08-25)
+Design doc: `docs/stage-3-quotation-document.md` §3.6b onwards. Agreed after Stage 3 shipped,
+when it became clear the single-headcount / single-residency / single-destination model does
+not describe real bookings.
+
+Confirmed rules: non-residents are charged in **USD** and residents in **KES**, with the group
+total converted at a **disclosed** contract rate; **flights are named but never priced** while
+airport transfers are charged normally; **rooms split by residency, charges by residency and
+traveller type**; meal plan is chosen **per leg** (a day excursion means half board is the
+right plan, not a fallback); packages are **curated, not enumerated** — 3 legs x 4 hotels x 3
+transport modes is 192 combinations and a matrix of those is meaningless; the build-up stays
+backend-only and the client sees per-person and group totals only.
+
+- ◑ 3.8 Cohorts, currencies and the cost-basis vector — **pure layer done**
+  (`app/modules/quotes/cohorts.py`, 488 tests, no DB, sub-second): the group as cohorts, seven
+  cost bases resolved against it, per-residency rooming, per-cohort build-up with per-person
+  re-derived so every figure reconciles, shared costs split-then-converted. **Remaining:** the
+  schema for cohorts, wiring `OptionPricingService` onto it, and bringing park fees, mandatory
+  activities and child rates into the build-up for the first time
+- ☐ 3.9 Packages — one property per leg, meal plan per leg with the agent's choice separated
+  from the engine's result, leg-date contiguity as a blocking check, per-leg minimum stay
+- ☐ 3.10 Transport pricing — per transition plus arrival and departure, flights named and
+  unpriced, airport transfers charged, transfers validated per line-haul
+- ☐ 3.11 The curated package x transport table
+- ☐ 3.12 Internal costing worksheet (the mirror of the client document, every line with its
+  basis, multiplier and source document) + the exclusions list (travel insurance and the rest)
+
+**Known gap carried in:** `compute_park_fee` has no callers anywhere — park fees are computed
+nowhere in the system, despite a docstring claiming the Stage 2.8 engine uses them. 3.8 closes
+this.
+
 Key rules (detail in the design doc): rates are stored **VAT-inclusive** (16%; exclusive
 sources normalised ×1.16) so the engine adds no tax on top; margin, contingency and
 supplier/STO rates are **backend only**; per-person is rounded up to the nearest 100 and

@@ -816,3 +816,99 @@ reproducing it number-for-number would mean reproducing an arithmetic error. Wha
 reproduced is its **shape** — a 25-pax group, several options at different board bases, one
 recommended, one property declined with a printed reason — against seeded rates whose
 expected results are worked by hand.
+
+---
+
+## 12. Cohorts, currencies and cost bases (§3.6b — confirmed 2026-08-25)
+
+Stage 3 priced a quote as one headcount at one residency in one currency, visiting one place.
+The client confirmed that none of those hold in general. This section records the model that
+replaces it; `app/modules/quotes/cohorts.py` is the implementation and its docstring is the
+short version.
+
+### 12.1 The group is cohorts
+
+A **cohort** is a set of travellers who all pay the same price in the same currency:
+`(residence, traveller_type)` with a count. Built from *counts*, not from named traveller
+rows, because that is how a group booking is quoted — "twenty-five people, six non-resident,
+two children". Named travellers stay available for passport-level detail at booking time;
+they are not what pricing needs.
+
+**Currency is a property of the residency**, not of the cohort: a resident adult and a
+resident child are billed on the same sheet, so cohorts of one residency disagreeing on
+currency is a data error and is refused.
+
+| Cohort | Charged in | Why |
+|---|---|---|
+| Resident | KES | The hotel bills us in shillings for them |
+| Non-resident | USD | The hotel bills us in dollars, so quoting in dollars passes the exchange risk to the party the currency belongs to instead of us absorbing a month of drift |
+
+The group total is stated in one currency, converted at the **contract rate, disclosed on the
+document**. A converted total with an unstated rate is a dispute waiting to happen.
+
+### 12.2 Two partitions, and they are not the same
+
+The single most expensive thing to get wrong here. See the decision log entry; in short:
+
+| Job | Partitioned by | Because |
+|---|---|---|
+| Rooming | residency **only** | A room is priced per room at one residency; a mixed room has no defined rate |
+| Charging | residency **and** traveller type | A child pays a child rate — but sleeps in their parents' room |
+
+Per-residency rooming costs the occasional extra room (three residents plus three
+non-residents is four twins, where six of one residency is three). That is the price of mixed
+groups being quotable at all.
+
+### 12.3 Every cost is (amount, currency, basis)
+
+An amount is meaningless without its basis — the same 3,300 is a very different number per
+person per night than per room, and the sheets use both. So the basis travels with the amount
+and the multiplier is derived from the group, never hand-computed at the call site. This
+generalises what `supplement_cost` already did for four bases.
+
+| Basis | Multiplier |
+|---|---|
+| `per_person_per_night` | pax × nights |
+| `per_person_per_day` | pax × days |
+| `per_person` | pax |
+| `per_room_per_night` | rooms × nights |
+| `per_room` | rooms |
+| `per_group_per_night` | nights |
+| `per_group` | 1 |
+
+**Nights and days are deliberately separate.** A stay is counted in nights; park and
+conservation fees are charged per 24-hour period of presence, which for an overnight leg is
+the same count but for a day excursion is one against zero nights. Conflating them either
+loses a day of fees or invents a night of a hotel.
+
+A line naming a **traveller type without a residence** is not expressible: "all children"
+would have to be priced at two residencies' rates at once.
+
+### 12.4 Attribution
+
+- A line scoped to a residency **and** a traveller type goes to that cohort.
+- A line scoped to a residency is shared **within** it, per head.
+- A line scoped to neither is shared across the group, per head — a seat on a coach costs the
+  same whoever is in it.
+- A line for a cohort nobody is in (a child rate on an all-adult group) is **dropped**, never
+  reassigned; charging somebody else's rate to whoever is left is the wrong answer.
+
+### 12.5 The order of operations, and why
+
+```
+costs built on the whole group          # 13 rooms, one vehicle, fees summed
+  -> attributed to cohorts             # per-head for shared, split before converting
+    -> per cohort: + contingency, x profit, + agent-fee share
+      -> per-person, rounded UP to the step
+        -> cohort total = per-person x headcount
+          -> group total = sum of cohort totals, converted
+```
+
+Every figure then reconciles with every other: residents' rate × residents, plus
+non-residents' rate × non-residents, equals the group total exactly. Dividing a rounded group
+total instead is what makes the reference proposal contradict itself (§3.6) — and the client
+asked for group-level costing, which this gives, without inheriting that defect.
+
+One consequence to hold on to: rounding up is applied per person and then multiplied out, so
+the slack above cost is up to one rounding step **per traveller** — as much as 2,500 on a
+25-person booking.
