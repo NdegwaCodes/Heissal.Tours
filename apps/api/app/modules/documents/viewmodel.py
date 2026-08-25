@@ -15,6 +15,13 @@ Two sources feed it, deliberately:
   freezing image ids into a snapshot would leave an old document unable to show a
   picture that was merely re-cropped.
 
+Images are **inlined as data URIs**, not linked. The document has to be
+self-contained: the PDF renderer is given no network access and no credentials,
+and even the HTML is served to a caller holding a bearer token that a browser
+would not replay when fetching an ``<img>``. Linking produced a proposal with a
+row of broken images in every context that mattered. ``inline_assets=False``
+keeps the URLs for an admin preview that can authenticate its own fetches.
+
 Sections whose data the quote does not carry are simply absent — the transport
 page needs transport segments, the signature-experience page needs an activity
 flagged for its own section. An empty section is omitted rather than filled with
@@ -24,14 +31,17 @@ worse than one that stays quiet about them.
 
 from __future__ import annotations
 
+import base64
 import uuid
 from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.storage import read_bytes
 from app.modules.accommodations.models import Accommodation
 from app.modules.activities.models import Activity, ActivityPriceTier
 from app.modules.activities.service import ActivityRateService
@@ -179,8 +189,9 @@ class QuotationView:
 class QuotationViewBuilder:
     """Assembles the view model for one issued version."""
 
-    def __init__(self, db: AsyncSession):
+    def __init__(self, db: AsyncSession, *, inline_assets: bool = True):
         self.db = db
+        self.inline_assets = inline_assets
 
     async def build(
         self, quote: Quote, version: QuoteVersion, config: DocumentConfig
@@ -546,10 +557,7 @@ class QuotationViewBuilder:
         ).scalar_one_or_none()
         if row is None:
             return None
-        return Image(
-            url=f"/api/v1/destination-images/{row.id}/file",
-            alt=row.alt_text or destination.name,
-        )
+        return self._image(row, "destination-images", row.alt_text or destination.name)
 
     async def _property_images(
         self, accommodation_id: str | None
@@ -572,13 +580,31 @@ class QuotationViewBuilder:
             .all()
         )
         images = [
-            Image(url=f"/api/v1/property-images/{row.id}/file", alt=row.alt_text or "")
-            for row in rows
+            image
+            for image in (
+                self._image(row, "property-images", row.alt_text or "") for row in rows
+            )
+            if image is not None
         ]
         if not images:
             return None, []
         # One hero and up to four thumbnails, which is the reference layout.
         return images[0], images[1:5]
+
+    def _image(self, row: Any, kind: str, alt: str) -> Image | None:
+        """A reference the document can actually resolve.
+
+        A row whose bytes have gone missing returns ``None`` and the image is
+        left out entirely. A broken image on a client proposal is worse than one
+        fewer photograph, and it is not a reason to fail the whole render.
+        """
+        if not self.inline_assets:
+            return Image(url=f"/api/v1/{kind}/{row.id}/file", alt=alt)
+        try:
+            payload = base64.b64encode(read_bytes(row.storage_path)).decode("ascii")
+        except (OSError, ValueError):
+            return None
+        return Image(url=f"data:{row.content_type};base64,{payload}", alt=alt)
 
     async def _blurb(self, accommodation_id: str | None) -> str | None:
         if not accommodation_id:

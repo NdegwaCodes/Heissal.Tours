@@ -421,3 +421,51 @@ kept and cropping stays a presentation concern. Storing pre-cropped copies would
 re-deriving every image whenever a layout changed, for a result the renderer produces free. A
 stored derivative earns its place only when one image needs a crop of its own — a subject
 off-centre — which is a different problem.
+
+**PDF rendering sits behind a provider seam, with headless Chromium behind it**
+(Stage 3.6, 2026-08-25)
+The template was designed and visually verified in a browser, and CSS grid, `object-fit`
+(which is how the document centre-crops its photographs) and `@page` all behave there. A
+pure-Python engine such as WeasyPrint needs no subprocess but does not implement grid, so it
+would silently reflow every page of this template — plugging one in is easy, making the
+document survive it is a different job. A hosted rendering API would plug in at the same
+seam, which is what a container without a browser would reach for. The protocol is
+deliberately narrow, HTML in and PDF bytes out, so nothing about the quotation leaks into the
+renderer.
+
+**A configured browser path is never second-guessed** (Stage 3.6, 2026-08-25)
+When `PDF_BROWSER_PATH` is set and wrong, the renderer reports itself unavailable rather than
+falling back to whatever else it can find. Two engines paginate differently, and a client
+proposal changing shape because a host happened to have Edge installed instead of Chrome is
+the kind of difference nobody would think to look for. Discovery only applies when no path was
+given.
+
+**Missing renderer and broken renderer are different errors** (Stage 3.6, 2026-08-25)
+No browser on the host produces a message naming what to install and pointing at the HTML
+document, which still renders — that is the whole reason for saying it. A browser that ran and
+failed reports the engine name and its own output. Neither is a 500, because both are things
+an operator can act on and a caller needs to distinguish.
+
+**The PDF is deliberately not cached** (Stage 3.6, 2026-08-25)
+Caching would have to key on the version *and* on the brand copy, the fonts and the paper
+size, all of which an admin can edit — so a version-keyed cache would keep serving the old
+phone number after someone corrected it. Paying about a second per render is cheaper than that
+class of bug. If PDFs later need attaching to email, they can be stored at that point,
+fingerprinted against the configuration they were produced from.
+
+**Documents are self-contained, which fixed the HTML too** (Stage 3.6, 2026-08-25)
+The 3.5 note called linked images "a PDF problem". It was wider than that: a browser opening
+the HTML document does not replay a bearer token when fetching an `<img>` either, so the
+linked version had broken images in every context that mattered. Images are now inlined as
+data URIs by default in both outputs, which also makes the HTML something that can be saved
+and forwarded. `?inline_assets=false` keeps links for a preview whose fetcher can
+authenticate.
+
+**Uploaded images are decoded before they are accepted** (Stage 3.6, 2026-08-25)
+The declared content type is a claim the uploader makes; decoding is the check. A corrupt file
+used to upload, store and embed without complaint and then render as alt text across the hero
+of a client proposal — which is how it was found, by looking at a printed cover that was a
+dark rectangle with a caption on it. The format check runs before the decode so the message
+matches the mistake: a PDF in an image slot is told it is the wrong format, not that it failed
+to decode. Width and height fall out of the same decode, so those columns stop being
+permanently NULL.

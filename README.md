@@ -31,6 +31,10 @@ legacy/         Archived original code — reference only, not built
 - Docker + Docker Compose
 - Node ≥ 20 and pnpm 10 (`corepack enable`)
 - Python 3.11+ and [uv](https://docs.astral.sh/uv/)
+- A Chromium-family browser, to print quotations to PDF. Found automatically in the
+  usual places; set `PDF_BROWSER_PATH` to pin one, and `PDF_BROWSER_NO_SANDBOX=true`
+  in a container. Without it the HTML document still renders and the PDF endpoint
+  explains what is missing rather than failing obscurely.
 
 ## Quick start (Docker — full stack)
 

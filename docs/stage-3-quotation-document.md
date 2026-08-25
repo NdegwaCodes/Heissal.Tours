@@ -474,10 +474,37 @@ new table.
 - **Paper is A4 by default.** The reference proposal was laid out on US Letter, but this
   document is printed in Kenya. It is config, since it is a property of the printer rather
   than of the design.
-- **Known gap for 3.6:** image URLs are authenticated API paths, so an offline PDF
-  renderer cannot fetch them. PDF generation has to inline the bytes as data URIs (or
-  render through an authenticated context) or the photographs will be missing from the
-  file.
+
+### 3.11b Printing to PDF (3.6)
+
+- **Images are inlined as data URIs, in both the HTML and the PDF.** The 3.5 gap turned out
+  to be wider than "a PDF problem": a browser opening the HTML document does not replay a
+  bearer token when fetching an `<img>` either, so the linked version had broken images in
+  every context that mattered. A self-contained document is the right artefact anyway —
+  it can be saved and forwarded. `?inline_assets=false` keeps links for a preview whose
+  fetcher can authenticate.
+- **A `PdfRenderProvider` seam, with headless Chromium behind it.** The template was
+  designed and visually verified in a browser, and CSS grid, `object-fit` and `@page` all
+  behave there. A pure-Python engine needs no subprocess but does not implement grid, and
+  would silently reflow every page. A hosted rendering API would plug in at the same seam.
+- **A configured browser path is never second-guessed.** Two engines paginate differently;
+  a client proposal must not change shape because a host had something else installed. An
+  explicit path that is wrong produces an error, not a fallback.
+- **Missing renderer ≠ broken renderer.** No browser on the host gives a message naming
+  what to install and pointing at the HTML document, which still works. A browser that ran
+  and failed reports the engine name and its output. Neither is a 500.
+- **The PDF is not cached.** It would have to be keyed on the version *and* on the brand
+  copy, the fonts and the paper size — all admin-editable — so a cache would keep serving
+  the old phone number after someone corrected it. A second per render is cheaper than that
+  class of bug. If PDFs later need attaching to email they can be stored then, fingerprinted
+  against the config they were produced from.
+- **The filename is `HTQ-YYYY-NNNN-vN.pdf`.** Two versions of one quote are two documents,
+  and a support conversation about "the PDF you sent" has to be able to tell them apart.
+- **Uploads are decoded before they are accepted.** The declared content type is a claim;
+  decoding is the check. A corrupt file used to upload, store and embed without complaint
+  and then render as alt text across the hero of a proposal — found exactly that way, by
+  looking at a printed cover. The dimensions fall out of the same decode, which is why
+  `width`/`height` stop being permanently NULL.
 
 ## 4. Data model changes
 

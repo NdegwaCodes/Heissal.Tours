@@ -20,8 +20,11 @@ from jinja2 import Environment, FileSystemLoader, StrictUndefined, select_autoes
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.errors import AppError, ConflictError, NotFoundError
+from app.integrations.pdf_render import PdfRenderError, PdfRenderProvider
 from app.modules.documents.config import DOCUMENT_SETTINGS_KEY, DocumentConfig
+from app.modules.documents.pdf import default_renderer
 from app.modules.documents.viewmodel import QuotationView, QuotationViewBuilder
 from app.modules.quotes.models import Quote, QuoteVersion
 from app.modules.settings.models import AppSetting
@@ -103,23 +106,78 @@ def environment() -> Environment:
 
 
 class QuotationDocumentService:
-    def __init__(self, db: AsyncSession):
+    def __init__(self, db: AsyncSession, renderer: PdfRenderProvider | None = None):
         self.db = db
+        self.renderer: PdfRenderProvider = renderer or default_renderer()
 
     async def view(
-        self, quote_id: uuid.UUID, *, version_number: int | None = None
+        self,
+        quote_id: uuid.UUID,
+        *,
+        version_number: int | None = None,
+        inline_assets: bool = True,
     ) -> QuotationView:
         quote, version = await self._resolve(quote_id, version_number)
         config = await DocumentConfigService(self.db).get()
-        return await QuotationViewBuilder(self.db).build(quote, version, config)
+        builder = QuotationViewBuilder(self.db, inline_assets=inline_assets)
+        return await builder.build(quote, version, config)
 
     async def render_html(
-        self, quote_id: uuid.UUID, *, version_number: int | None = None
+        self,
+        quote_id: uuid.UUID,
+        *,
+        version_number: int | None = None,
+        inline_assets: bool = True,
     ) -> str:
-        view = await self.view(quote_id, version_number=version_number)
+        view = await self.view(
+            quote_id, version_number=version_number, inline_assets=inline_assets
+        )
         page = PAGE_SIZES.get(view.config.page_size, PAGE_SIZES["A4"])
         template = environment().get_template("quotation.html.j2")
         return template.render(view=view, page=page)
+
+    async def render_pdf(
+        self, quote_id: uuid.UUID, *, version_number: int | None = None
+    ) -> tuple[bytes, str]:
+        """The PDF and the filename it should be saved as.
+
+        Rendered on demand and deliberately not cached. A cached PDF is keyed on
+        the version, but the document also depends on the brand copy, the fonts
+        and the paper size — all of which an admin can change — so a cache would
+        keep serving the old phone number after someone corrected it. Paying a
+        second per render is cheaper than that class of bug, and if PDFs later
+        need to be attached to email they can be stored then, fingerprinted
+        against the config they were produced from.
+        """
+        if not self.renderer.is_available():
+            raise AppError(
+                "No PDF renderer is available on this host, so the document can "
+                "only be produced as HTML. Install a Chromium-family browser or "
+                "set PDF_BROWSER_PATH."
+            )
+        quote, version = await self._resolve(quote_id, version_number)
+        html = await self.render_html(
+            quote_id, version_number=version.version_number, inline_assets=True
+        )
+        try:
+            pdf = await self.renderer.render(
+                html, timeout_seconds=settings.PDF_RENDER_TIMEOUT_SECONDS
+            )
+        except PdfRenderError as exc:
+            # A renderer that was present and failed is an operational problem,
+            # not a bad request, but the caller still needs to know which.
+            raise AppError(f"The document could not be printed: {exc}") from exc
+        return pdf, self.filename(quote.quote_number, version.version_number)
+
+    @staticmethod
+    def filename(quote_number: str, version_number: int) -> str:
+        """``HTQ-2026-0037-v2.pdf`` — the quote number a client will quote back.
+
+        The version is in the name because two versions of one quote are two
+        different documents, and a support conversation about "the PDF you sent"
+        needs to be able to tell them apart.
+        """
+        return f"{quote_number}-v{version_number}.pdf"
 
     async def _resolve(
         self, quote_id: uuid.UUID, version_number: int | None

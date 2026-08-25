@@ -17,9 +17,11 @@ subject off-centre), that is when a stored derivative earns its place.
 
 from __future__ import annotations
 
+import io
 import uuid
 from typing import Any
 
+from PIL import Image, UnidentifiedImageError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -59,6 +61,7 @@ class MediaService:
         accommodation = await self.db.get(Accommodation, accommodation_id)
         if accommodation is None:
             raise NotFoundError("Accommodation not found.")
+        width, height = self._dimensions(content, content_type)
         stored = self._store(content, filename=filename, content_type=content_type,
                              subdir="property-images")
         existing = (
@@ -84,6 +87,8 @@ class MediaService:
             content_type=content_type,
             byte_size=stored.byte_size,
             checksum=stored.checksum,
+            width=width,
+            height=height,
             alt_text=alt_text or f"{accommodation.name}",
             is_hero=is_hero,
             sort_order=sort_order if sort_order is not None else highest + 1,
@@ -129,6 +134,7 @@ class MediaService:
         destination = await self.db.get(Destination, destination_id)
         if destination is None:
             raise NotFoundError("Destination not found.")
+        width, height = self._dimensions(content, content_type)
         stored = self._store(content, filename=filename, content_type=content_type,
                              subdir="destination-images")
         existing = (
@@ -151,6 +157,8 @@ class MediaService:
             content_type=content_type,
             byte_size=stored.byte_size,
             checksum=stored.checksum,
+            width=width,
+            height=height,
             alt_text=alt_text or destination.name,
             is_cover=is_cover,
             sort_order=sort_order if sort_order is not None else highest + 1,
@@ -201,7 +209,24 @@ class MediaService:
         await self.db.commit()
 
     @staticmethod
-    def _store(content: bytes, *, filename: str, content_type: str, subdir: str):
+    def _dimensions(content: bytes, content_type: str) -> tuple[int, int]:
+        """Check the declared format, then decode, refusing anything that is not
+        really an image.
+
+        The two checks are in this order so the message matches the mistake: a
+        PDF uploaded to an image slot should be told it is the wrong format, not
+        that it failed to decode.
+
+        The declared content type is a claim the uploader makes; this is the
+        check. It matters more here than for most uploads because the failure is
+        silent and downstream: a corrupt file stores fine, embeds fine, and then
+        renders as alt text across the hero of a client's proposal. Found
+        exactly that way — a hand-built PNG in a fixture that no browser could
+        decode.
+
+        The dimensions fall out of the same decode, which is why the columns for
+        them stop being permanently NULL.
+        """
         if content_type not in ALLOWED_IMAGE_TYPES:
             raise AppError(
                 f"{content_type or 'that file'} is not an accepted image format. "
@@ -209,6 +234,20 @@ class MediaService:
             )
         if not content:
             raise AppError("That file is empty.")
+        try:
+            with Image.open(io.BytesIO(content)) as image:
+                image.verify()
+            # verify() consumes the file, so the reopen is required to read size.
+            with Image.open(io.BytesIO(content)) as image:
+                return int(image.width), int(image.height)
+        except (UnidentifiedImageError, OSError, ValueError) as exc:
+            raise AppError(
+                "That file is not a readable image. It would upload without "
+                "complaint and then fail to render on the quotation."
+            ) from exc
+
+    @staticmethod
+    def _store(content: bytes, *, filename: str, content_type: str, subdir: str):
         # The extension comes from the declared type, never from the filename:
         # the stored name must not be influenced by the upload at all.
         return save_bytes(

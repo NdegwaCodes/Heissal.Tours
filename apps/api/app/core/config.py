@@ -66,6 +66,24 @@ class Settings(BaseSettings):
     UPLOAD_ROOT: str = "var/uploads"
     MAX_UPLOAD_BYTES: int = 25 * 1024 * 1024
 
+    # --- PDF rendering (Stage 3.6) ---
+    # The quotation is printed through a headless Chromium-family browser,
+    # because the template was designed and visually verified in one: CSS grid,
+    # object-fit and @page all behave as intended. Left empty, the renderer looks
+    # in the usual places for each platform, so a normal developer machine and a
+    # normal container both work unconfigured. Set it to pin a specific browser —
+    # different engines paginate differently, and a client proposal should not
+    # change shape because a host had a different browser installed.
+    PDF_BROWSER_PATH: str | None = None
+    # Required in most containers, where Chromium cannot use its sandbox. Off by
+    # default because it is a real reduction in isolation and only the deployment
+    # knows whether it is needed.
+    PDF_BROWSER_NO_SANDBOX: bool = False
+    # A ceiling on how long layout may settle before the snapshot, not a wait:
+    # the document carries no scripts.
+    PDF_RENDER_SETTLE_MS: int = 3000
+    PDF_RENDER_TIMEOUT_SECONDS: int = 60
+
     @field_validator("BACKEND_CORS_ORIGINS", mode="before")
     @classmethod
     def _split_cors(cls, v: object) -> object:

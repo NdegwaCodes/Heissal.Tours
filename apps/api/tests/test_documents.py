@@ -154,6 +154,43 @@ async def test_a_non_image_upload_is_refused(client, admin_tokens, sample_catalo
     assert "not an accepted image format" in resp.text
 
 
+async def test_a_file_that_is_not_really_an_image_is_refused(
+    client, admin_tokens, sample_catalogue
+):
+    """The declared content type is a claim; decoding it is the check.
+
+    A corrupt file uploads without complaint, embeds without complaint, and then
+    renders as alt text across the hero of a client's proposal. Found exactly
+    that way, by looking at a printed PDF whose cover was a dark rectangle with a
+    caption on it.
+    """
+    h = _h(admin_tokens)
+    # A plausible PNG signature followed by nothing a decoder can use.
+    broken = bytes.fromhex("89504e470d0a1a0a") + bytes(40)
+    resp = await client.post(
+        f"{API}/accommodations/{sample_catalogue['acc_villa']}/images",
+        headers=h,
+        files={"file": ("broken.png", broken, "image/png")},
+    )
+    assert resp.status_code == 400
+    assert "not a readable image" in resp.text
+
+
+async def test_an_uploaded_image_records_its_dimensions(
+    client, admin_tokens, sample_catalogue
+):
+    """They fall out of the decode, so the columns stop being permanently NULL."""
+    h = _h(admin_tokens)
+    resp = await client.post(
+        f"{API}/accommodations/{sample_catalogue['acc_villa']}/images",
+        headers=h,
+        files={"file": ("wide.png", png_bytes((7, 8, 9), (64, 24)), "image/png")},
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["width"] == 64
+    assert resp.json()["height"] == 24
+
+
 async def test_svg_is_refused(client, admin_tokens, sample_catalogue):
     """An SVG is a script-bearing document, not a photograph."""
     h = _h(admin_tokens)
@@ -310,10 +347,20 @@ async def test_imagery_reaches_the_document(client, admin_tokens, sample_catalog
     assert hero.status_code == 201, hero.text
 
     quote, _ = await _issued_quote(client, h, sample_catalogue)
+
+    # Embedded by default: the document has to stand alone, because the PDF
+    # renderer has no credentials and a browser will not replay a bearer token
+    # when fetching an <img>.
     html = await _render(client, h, quote["id"])
-    assert f"/api/v1/destination-images/{cover.json()['id']}/file" in html
-    assert f"/api/v1/property-images/{hero.json()['id']}/file" in html
+    assert "src=\"data:image/png;base64," in html
+    assert "/api/v1/property-images/" not in html
     assert "The Diani coastline" in html
+
+    # Linked on request, for a preview whose fetcher can authenticate.
+    linked = await _render(client, h, quote["id"], inline_assets="false")
+    assert f"/api/v1/destination-images/{cover.json()['id']}/file" in linked
+    assert f"/api/v1/property-images/{hero.json()['id']}/file" in linked
+    assert "data:image/png;base64," not in linked
 
 
 async def test_a_version_renders_as_the_client_received_it(

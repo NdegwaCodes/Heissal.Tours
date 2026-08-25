@@ -15,6 +15,8 @@ class ImageRead(BaseModel):
     content_type: str
     byte_size: int
     checksum: str
+    width: int | None
+    height: int | None
     alt_text: str | None
     sort_order: int
     created_at: datetime

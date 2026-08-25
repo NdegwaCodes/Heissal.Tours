@@ -10,7 +10,7 @@ from __future__ import annotations
 import uuid
 
 from fastapi import APIRouter, Depends, Query
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import require_permission
@@ -56,6 +56,13 @@ async def render_quotation_html(
         ge=1,
         description="Version number to render. Defaults to the latest issued one.",
     ),
+    inline_assets: bool = Query(
+        default=True,
+        description=(
+            "Embed the photographs in the document. False links them instead, "
+            "for a preview whose fetcher can authenticate."
+        ),
+    ),
     db: AsyncSession = Depends(get_db),
     _=Depends(require_permission("quote:read")),
 ):
@@ -67,6 +74,43 @@ async def render_quotation_html(
     client received it.
     """
     html = await QuotationDocumentService(db).render_html(
-        quote_id, version_number=version
+        quote_id, version_number=version, inline_assets=inline_assets
     )
     return HTMLResponse(content=html)
+
+
+@router.get(
+    "/quotes/{quote_id}/document.pdf",
+    response_class=Response,
+    responses={200: {"content": {"application/pdf": {}}}},
+)
+async def render_quotation_pdf(
+    quote_id: uuid.UUID,
+    version: int | None = Query(
+        default=None,
+        ge=1,
+        description="Version number to print. Defaults to the latest issued one.",
+    ),
+    download: bool = Query(
+        default=True,
+        description="Send as an attachment. False renders inline in the browser.",
+    ),
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_permission("quote:read")),
+):
+    """Print an issued quotation to PDF (§3.11).
+
+    The same document as ``document.html``, through a headless browser, with
+    every photograph embedded so the file stands alone once it leaves here. The
+    filename carries the quote number and version, because two versions of one
+    quote are two different documents and a client will quote the name back.
+    """
+    pdf, filename = await QuotationDocumentService(db).render_pdf(
+        quote_id, version_number=version
+    )
+    disposition = "attachment" if download else "inline"
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'{disposition}; filename="{filename}"'},
+    )
