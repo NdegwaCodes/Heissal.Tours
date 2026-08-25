@@ -65,6 +65,7 @@ BASES: frozenset[str] = frozenset(
         "per_room_per_night",
         "per_room",
         "per_group_per_night",
+        "per_group_per_day",
         "per_group",
     }
 )
@@ -93,9 +94,54 @@ def multiplier(
         "per_room_per_night": rooms * nights,
         "per_room": rooms,
         "per_group_per_night": nights,
+        # KWS charges a vehicle by seat band per *day* in the park — 4,500 for a
+        # 25-44 seater — which is a group charge on a day count, and was the one
+        # real basis this table did not have. ``units`` carries the vehicle count.
+        "per_group_per_day": days,
         "per_group": 1,
     }[basis]
     return max(0, per) * units
+
+
+# --------------------------------------------------------------------------- #
+# Group discounts on park entry (KWS "FEES FOR GROUP ACTIVITIES")
+# --------------------------------------------------------------------------- #
+
+# KWS publishes a MICE ladder for pre-booked groups. Its wording — "Amount of
+# fees: 30% of the applicable park entry fees" — is genuinely ambiguous: read
+# literally the group *pays* 30%, but then a 10-29 group paying 5% would get a
+# far better deal than a 100+ group paying 30%, which inverts a volume ladder.
+# The only reading where the ladder is monotonic is a **discount** percentage,
+# so that is what is modelled.
+#
+# It is shipped switched OFF (see ``mice_discount_pct`` returning 0 unless a
+# ladder is supplied) because the two readings differ by an order of magnitude
+# and the safe error is the visible one: failing to claim a discount we are owed
+# shows up as a slightly high quote, while applying a 95% reduction we are not
+# owed shows up as a loss nobody notices. Enable it in the pricing config once
+# KWS confirms the reading.
+MICE_LADDER: tuple[tuple[int, int, Decimal], ...] = (
+    (10, 29, Decimal("5")),
+    (30, 49, Decimal("10")),
+    (50, 99, Decimal("20")),
+    (100, 10_000_000, Decimal("30")),
+)
+
+
+def mice_discount_pct(
+    pax: int, *, ladder: Sequence[tuple[int, int, Decimal]] | None = None
+) -> Decimal:
+    """The pre-booked-group discount on park entry fees for ``pax`` people.
+
+    Returns zero when no ladder is configured, so the discount is opt-in rather
+    than a silent default.
+    """
+    if not ladder:
+        return Decimal(0)
+    for low, high, pct in ladder:
+        if low <= pax <= high:
+            return pct
+    return Decimal(0)
 
 
 # --------------------------------------------------------------------------- #

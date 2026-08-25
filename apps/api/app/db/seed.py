@@ -30,11 +30,26 @@ DEFAULT_CURRENCIES = [
     ("GBP", "Pound Sterling", "£", 2),
 ]
 
+# The five tiers Kenyan pricing actually uses, matched to the columns on the KWS
+# Conservation Fees 2025 schedule — which prices East African Citizen and Kenya
+# Resident in shillings and Non-Resident and African Citizen in dollars.
+#
+# The currency here is a **billing default**, not a rule: it suggests what to
+# quote this category in. What a supplier *charges us* travels on each rate row,
+# and the two differ in practice — KWS bills a Kenya Resident in KES while
+# Swahili Beach's STO sheet quotes resident rates in USD. Cohort pricing converts
+# between them, so a category's default currency never constrains a cost line.
+#
+# `african_citizen` is a national of an African country outside East Africa, and
+# is charged materially less than a non-resident (Amboseli: USD 50 against 90).
+# It had no category until the KWS schedule was read, so every such traveller was
+# being quoted as a full non-resident.
 DEFAULT_RESIDENCE_CATEGORIES = [
     ("citizen", "Kenyan Citizen", 1, "KES"),
-    ("ea_resident", "East African Resident", 2, "KES"),
-    ("resident", "Resident", 3, "USD"),
-    ("non_resident", "Non-Resident", 4, "USD"),
+    ("ea_resident", "East African Citizen", 2, "KES"),
+    ("resident", "Kenya Resident", 3, "KES"),
+    ("african_citizen", "African Citizen", 4, "USD"),
+    ("non_resident", "Non-Resident", 5, "USD"),
 ]
 
 # The USD->KES rate is a CONTRACT rate, not a market rate: supplier rate sheets

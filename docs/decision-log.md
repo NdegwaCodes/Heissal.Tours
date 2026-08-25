@@ -558,3 +558,59 @@ Its docstring claimed the Stage 2.8 pricing engine reused it. Nothing in the cod
 it, so park and conservation fees were not merely absent from Stage 3's option build-up —
 they were computed nowhere at all. Recorded because the docstring was actively misleading:
 the gap looked like a Stage 3 omission and was system-wide.
+
+**A fee's currency belongs to the schedule column, not to the residence category**
+(Stage 3.8, 2026-08-25)
+The park-fee seeder first took each row's currency from the residence category's
+`default_currency_code`, and stored Kenya Resident fees in **dollars** — the category's
+seeded default — where the KWS schedule charges them 2,025 *shillings*. Two different facts
+had been conflated: a category's default currency is what we would choose to **quote** that
+traveller in, while a fee's currency is what the authority **charges**, and they genuinely
+differ (KWS bills a Kenya Resident in KES; Swahili Beach's STO sheet quotes the same person in
+USD). Reading it off the source column is also what keeps a stored fee reconcilable against
+the PDF it came from. Cohort pricing converts between cost currency and billing currency, so
+nothing downstream needs them to agree.
+
+**Seeding real reference data must be able to correct itself** (Stage 3.8, 2026-08-25)
+The seeder was insert-only, on the principle that a new schedule supersedes by adding rows at
+a later `effective_from` and never rewrites published history. That principle is right and it
+does not cover a **transcription error in a row the seeder owns**: the wrong figure is already
+on file, so every subsequent run skips it and the error is permanent. Found exactly that way —
+a fee stored in the wrong currency, with a re-run declining to fix it. `_fee` now updates a row
+whose figures differ from the schedule and reports a `fees_corrected` count, so a non-zero
+count on a real run is a signal worth reading. Superseding and correcting stay distinct
+operations.
+
+**Two residence categories were missing or wrong** (Stage 3.8, 2026-08-25)
+The KWS schedule prices four columns: East African Citizen and Kenya Resident in KES,
+Non-Resident and African Citizen in USD. `african_citizen` — a national of an African country
+outside East Africa — had no category at all, so every such traveller was quoted as a full
+non-resident (Amboseli: USD 90 against 50). `resident` was named "Resident" and defaulted to
+USD. Both corrected in the seed defaults; note that seeded reference data does not propagate
+to an existing database, which is why the fee currency no longer depends on it.
+
+**Child age bounds differ per park AND per residence category** (Stage 3.8, 2026-08-25)
+Already modelled per fee row, and the real data justifies it more strongly than the original
+reasoning did. KWS defines a child as five-to-under-eighteen but exempts a child of five and
+under, so the fee-bearing band is 6–17. The Maasai Mara charges a citizen child from 3 and a
+non-resident child only from 9 — different bounds for the same park on the same day. An
+eight-year-old non-resident is therefore free where a citizen of the same age is charged.
+
+**KWS's MICE group ladder is ambiguous and is shipped switched off** (Stage 3.8, 2026-08-25)
+The schedule reads "Amount of fees: 30% of the applicable park entry fees" for a 100+ group,
+down to 5% for a 10–29 group. Read literally the group *pays* that percentage — which would
+make a small group's deal far better than a large one's and inverts the ladder, so the only
+monotonic reading is a *discount* of that percentage. `MICE_LADDER` models the discount
+reading and `mice_discount_pct` returns zero unless a ladder is supplied, because the two
+readings differ by an order of magnitude and the safe error is the visible one: failing to
+claim a discount shows up as a slightly high quote, while applying a 95% reduction we are not
+owed is a loss nobody notices. Enable it once KWS confirms.
+
+**Park fees are per park category; conservancy fees are per night** (Stage 3.8, 2026-08-25)
+KWS prices by tier — Amboseli and Lake Nakuru are one "Premium Parks" line — so the seeder
+expands a category across its parks, since a quote names a place rather than a tier. Two other
+shapes the real data revealed: Mara conservancies charge **per person per night** where park
+entry is **per person per day** (which is why the basis table separates nights from days), and
+Lewa charges a different figure for a day visitor than for an overnight guest. Also recorded
+but not charged yet: the KWS vehicle seat-band levy, 4,500 a day for a 25–44 seater, which
+lands on any quote that drives into a park and is exactly the line that gets forgotten.

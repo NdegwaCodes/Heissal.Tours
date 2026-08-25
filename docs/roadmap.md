@@ -77,12 +77,20 @@ right plan, not a fallback); packages are **curated, not enumerated** — 3 legs
 transport modes is 192 combinations and a matrix of those is meaningless; the build-up stays
 backend-only and the client sees per-person and group totals only.
 
-- ◑ 3.8 Cohorts, currencies and the cost-basis vector — **pure layer done**
-  (`app/modules/quotes/cohorts.py`, 488 tests, no DB, sub-second): the group as cohorts, seven
-  cost bases resolved against it, per-residency rooming, per-cohort build-up with per-person
-  re-derived so every figure reconciles, shared costs split-then-converted. **Remaining:** the
-  schema for cohorts, wiring `OptionPricingService` onto it, and bringing park fees, mandatory
-  activities and child rates into the build-up for the first time
+- ◑ 3.8 Cohorts, currencies and the cost-basis vector
+  - ☑ **Pure layer** (`app/modules/quotes/cohorts.py`, no DB, sub-second): the group as
+    cohorts, eight cost bases resolved against it, per-residency rooming, per-cohort build-up
+    with per-person re-derived so every figure reconciles, shared costs split-then-converted
+  - ☑ **Real fee data** (`app/db/seed_park_fees.py`, 15 tests asserting published figures) —
+    the KWS Conservation Fees 2025 schedule (client-supplied 2026-08-25) across 18 parks,
+    reserves, sanctuaries and marine parks, plus the Maasai Mara's two seasons. Added the
+    missing `african_citizen` residence category and corrected `resident`; made the seeder able
+    to **correct** a wrong row rather than skip it forever
+  - ☐ **Remaining:** the cohort schema, wiring `OptionPricingService` onto the vector, and
+    bringing park fees, mandatory activities and child rates into a price for the first time
+  - **Open with the client:** the KWS MICE group-discount ladder is ambiguous and is shipped
+    switched off (see decision log); Mara conservancy fees are often already inside a lodge
+    rate, which is a double-charge risk once conservancies are priced
 - ☐ 3.9 Packages — one property per leg, meal plan per leg with the agent's choice separated
   from the engine's result, leg-date contiguity as a blocking check, per-leg minimum stay
 - ☐ 3.10 Transport pricing — per transition plus arrival and departure, flights named and
