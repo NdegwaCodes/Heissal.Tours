@@ -46,7 +46,12 @@ Design doc: `docs/stage-2-quote-engine.md` (pricing model, ERD, engine algorithm
 
 Dev tooling: `scripts/verify.sh` (lint + type + test); `scripts/scaffold_module.py` (CRUD modules from a JSON spec); `src/lib/catalogue.ts` is the frontend equivalent.
 
-Data note: bulk/CSV importer for accommodations + rates still wanted once the full hotel data lands.
+Data note: **rate intake templates now exist** — `docs/templates/rate-intake/` holds four
+CSVs (properties, room types, rates, supplements) plus a guide naming the five expensive
+mistakes. They are the manual path for the 27 of 35 supplier sheets the parser cannot fully
+read. The **importer that consumes them is not built yet**; `rate_basis`
+(`per_room` / `per_person_sharing`) is an intake-only column it must honour, since our rates
+are stored per room and 3 real sheets are quoted per person sharing.
 
 ## Stage 3 — Quotation Document  ☑ (3.1–3.7 built, tested and verified against the reference proposal)
 Design doc: `docs/stage-3-quotation-document.md` — confirmed rules, data model, ingestion
