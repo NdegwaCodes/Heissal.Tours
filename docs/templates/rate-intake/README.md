@@ -1,167 +1,150 @@
-# Hotel rate intake templates
+# Hotel rate intake — one sheet
 
-Four CSV files. Open them in Excel or Google Sheets, fill them in, save as CSV, send them
-back. They exist for the rate sheets the parser cannot read — of the 35 real supplier
-documents, 8 are fully machine-readable, 12 partial, 12 unrecognised and 3 are text-free
-scans (see the Stage 3 design doc §5b). This is the path for the other 27.
+**`hotel-rates.csv`** — open it in Excel or Google Sheets, fill it in, save as CSV UTF-8.
 
-Fill them in this order, because each refers to the one before it by **name**:
+One row per price. Property and room details repeat down the rows, which is deliberate:
+copying a property name into five rows is less work and far less error-prone than keeping
+four files in step by hand.
 
-| File | One row per | Rows for a typical property |
-|---|---|---|
-| `1-properties.csv` | property | 1 |
-| `2-room-types.csv` | room type | 2–5 |
-| `3-rates.csv` | price | **10–40** |
-| `4-supplements.csv` | festive loading or compulsory extra | 0–4 |
-
-`3-rates.csv` is where the work is, and where every expensive mistake lives. The rest of
-this file is about that.
-
-**Delete the `EXAMPLE` rows before sending.** They are there to show the shape of a real
-sheet, not to be imported.
+Delete the `EXAMPLE` rows before sending.
 
 ---
 
-## The five things that go wrong
+## `row_type` — the first column, and the only one that changes what the others mean
+
+| Value | Use it for | Charged |
+|---|---|---|
+| `RATE` | a room price | per the room, per night |
+| `SUPPLEMENT` | a compulsory addition — festive loading, gala dinner | always, whether asked for or not |
+| `EXTRA` | an optional add-on the client may decline | only if chosen |
+
+`SUPPLEMENT` and `EXTRA` rows leave the room and occupancy columns **blank**, which means
+"applies to the whole property". Fill them in only if the sheet limits the charge to one
+room type or meal plan.
+
+**20 of 32 real sheets carry a festive supplement and 8 make a gala dinner compulsory**, so
+if a property has none, that is worth double-checking rather than assuming. An empty
+supplement row silently under-charges every December quote.
+
+---
+
+## The five things that cost money
 
 ### 1. One row per occupancy, not one per room type
 
-**26 of the 32 readable sheets quote a different price per occupancy.** A single is neither
-half a double nor the same as one — it is its own published figure:
+**26 of 32 real sheets quote a different price per occupancy.** A single is neither half a
+double nor the same as one — it is its own published figure:
 
-| Occupancy | Creek Deluxe, full board, high season |
+| `price_covers` | Creek Deluxe, full board, high season |
 |---|---|
 | 1 | KES 28,400 |
 | 2 | KES 37,600 |
 
-So that room needs **two rows**. If you enter only the double, a lone guest cannot be
-priced at all, and a group of 25 in twins — which is twelve doubles **plus one single** —
-gets the wrong figure for that last room.
+So that room gets **two rows**. Enter only the double and a lone guest cannot be priced at
+all — and 25 people in twins is twelve doubles **plus one single**, so the last room takes
+the wrong figure.
 
-If the sheet genuinely quotes one price whatever the headcount, enter one row at the
-occupancy it is sold for.
+### 2. `charged_per` — for the room, or for one person?
 
-### 2. `rate_basis` — is the price for the room, or for one person?
+Most sheets price per room. A few price *per person sharing*, and the two look identical on
+paper. Getting it wrong is a factor of two on every quote using that property.
 
-Most sheets price **per room per night**. A few price **per person sharing**, and the two
-look identical on paper. Getting it wrong halves or doubles the accommodation cost of every
-quote using that property.
+| Value | Meaning |
+|---|---|
+| `room_per_night` | what the room costs, whoever is in it — **the usual case** |
+| `person_per_night` | what one guest pays per night. The sheet will say "per person sharing" |
+| `person_per_stay` | once per person for the whole stay — a gala dinner, an excursion |
+| `room_per_stay` | once per room for the whole stay |
 
-- `per_room` — the figure is what the room costs, whoever is in it. **Use this unless the
-  sheet says otherwise.**
-- `per_person_sharing` — the figure is what *one guest* pays. Enter the sheet's number
-  as-published and put `per_person_sharing` here; the conversion is done on import, so
-  there is no arithmetic for you to do and no chance of it being done twice.
+Enter the sheet's number exactly as printed either way. The conversion happens on import, so
+there is no arithmetic for you to do and no risk of it being done twice.
 
-### 3. `vat_basis` — say what the sheet says, not what you assume
+### 3. `vat` — write what the sheet says, not what you assume
 
 Most Kenyan sheets are VAT-inclusive and that is the default. But **if the sheet says
-exclusive, you must put `exclusive`**, because nothing downstream adds tax: the quotation
-tells the client the price includes VAT, so an exclusive figure entered as inclusive
-under-charges by the whole 16% *and* makes the document untrue.
+exclusive, you must write `exclusive`** — nothing downstream adds tax. The quotation tells
+the client the price includes VAT, so an exclusive figure entered as inclusive under-charges
+by the whole 16% *and* makes the document untrue.
 
-Enter the figure exactly as printed either way. The gross-up happens on import.
+Enter the figure as printed either way. The gross-up happens on import.
 
-### 4. `rate_kind` and `supplier_discount_pct` — never pre-apply a discount
+### 4. Never subtract a discount yourself
 
-| Sheet says | `rate_kind` | `supplier_discount_pct` | `rate_per_night` |
+| Sheet says | `rack_or_sto` | `discount_percent` | `amount` |
 |---|---|---|---|
 | "STO rates" / "our rates" | `sto` | blank | as printed |
-| "Rack rates" with no concession | `rack` | blank | as printed |
-| "Rack, less 15% for operators" | `rack` | `15` | **the rack figure, 24,000** |
+| "Rack rates", no concession | `rack` | blank | as printed |
+| "Rack, less 15% for operators" | `rack` | `15` | **24000** — the rack figure |
 
-Enter the rack figure and the 15 separately. Do **not** enter 20,400.
+Enter `24000` and `15`. **Not** `20400`.
 
 Two reasons. Any quoted price has to be reconcilable against the PDF it came from, and a
-pre-netted rate cannot be. And a stated discount on a rack rate is **halved** to the
-client — the client sees half the concession and Heissal retains the other half — which
-only works if the system knows the original figure. Enter 20,400 and that margin is lost
-silently.
+pre-netted rate cannot be. And a stated discount on a rack rate is **halved** to the client
+— they see half the concession, Heissal keeps the other half — which only works if the
+system knows the original figure. Enter 20,400 and that margin is gone without a trace.
 
-### 5. Dates: `YYYY-MM-DD`, always
+### 5. Dates are `YYYY-MM-DD`, always
 
 `2026-07-01`, never `01/07/2026`. Excel reads day-first or month-first depending on the
-machine's locale, and `03/04/2026` is a valid date under both readings — so the error does
-not announce itself, it just prices your April stay at March rates.
+machine's locale, and `03/04/2026` is valid under both — so the error does not announce
+itself, it just prices your April stay at March rates.
 
-If Excel reformats a column, set that column's format to Text before typing.
+If Excel keeps reformatting a date column, set that column's format to **Text** before
+typing.
 
 ---
 
-## Column reference
+## Every column
 
-### `1-properties.csv`
-
-| Column | Required | Notes |
+| Column | Rows | Notes |
 |---|---|---|
-| `property_name` | ✔ | The exact spelling used in the other three files |
-| `destination` | ✔ | Diani, Maasai Mara, Amboseli, Nairobi… Park fees attach to this |
-| `category` | | `resort`, `lodge`, `camp`, `villa`, `guest_house`, `hotel` |
-| `star_rating` | | 1–5, blank if unrated |
-| `check_in_time` / `check_out_time` | | 24-hour, `1400` / `1000` |
-| `child_min_age` / `child_max_age` | | The property's own child band, e.g. 3 and 11. **Leave blank if the sheet is silent — blank means a child is charged as an adult, which is the correct default, not a discount we invent.** |
-| `supplier_name` | | The contracting entity, if it differs from the property |
-| `contact_email` / `contact_phone` / `website` | | For re-confirming rates |
+| `row_type` | all | `RATE` · `SUPPLEMENT` · `EXTRA`. See above. |
+| `property_name` | all | Repeat it on every row for that property. Spelling must be consistent — it is what groups the rows. |
+| `destination` | all | Diani, Watamu, Maasai Mara, Amboseli… Park fees attach to this. |
+| `room_type` | RATE | As the sheet names it. Blank on SUPPLEMENT/EXTRA = whole property. |
+| `room_sleeps` | RATE | How many the unit **sleeps** — its capacity. Rooming is `ceil(guests ÷ this)`, so a 4-guest villa takes 7 units for 25 people where twins take 13. |
+| `meal_plan` | RATE | `RO` room only · `BB` bed & breakfast · `HB` half board · `FB` full board · `AI` all inclusive |
+| `guest_residence` | RATE | `citizen` · `ea_resident` · `resident` (foreign national holding a Kenyan permit) · `african_citizen` · `non_resident`. Blank on SUPPLEMENT/EXTRA = everyone. |
+| `price_covers` | RATE | How many guests **this price is for**. Not the same as `room_sleeps` — see trap 1. |
+| `label` | all | For a RATE, the sheet's season wording ("High season", "Festive"). For a SUPPLEMENT or EXTRA, its name ("Christmas Eve supplement"). |
+| `valid_from` / `valid_to` | all | ISO dates. A supplement's window is usually **narrower** than the season around it: Temple Point loads Christmas on 24–25 Dec inside a festive season running 20 Dec – 10 Jan. |
+| `currency` | all | `KES` or `USD` — as the sheet quotes it, not what we bill the client in. |
+| `amount` | all | As printed. No discount applied, no tax added. |
+| `charged_per` | all | See trap 2. |
+| `rack_or_sto` | RATE | See trap 4. |
+| `discount_percent` | RATE | The stated percentage, un-applied. See trap 4. |
+| `vat` | all | `inclusive` or `exclusive`. See trap 3. |
+| `child_amount` | RATE | Per child per night, if the sheet gives one. |
+| `child_ages` | RATE | The band as one cell, e.g. `3-11`. **Leave blank if the sheet is silent** — blank means a child is charged as an adult, which is the correct default. We do not invent a discount the hotel never offered. |
+| `min_nights` | RATE | Minimum stay, if stated. A request that does not meet it is **not offered** — the property appears on the quotation as considered, with the minimum quoted back as the reason. |
+| `notes` | all | Anything the columns cannot hold. Read by a human, not imported. |
 
-### `2-room-types.csv`
+Rates are chosen **night by night**, so a stay crossing two seasons prices each night
+correctly with no special handling from you. Just give each season its own row.
 
-| Column | Required | Notes |
-|---|---|---|
-| `property_name` | ✔ | Must match `1-properties.csv` |
-| `room_type_name` | ✔ | Exactly as the rate sheet names it |
-| `room_code` | | The property's own code, if it has one |
-| `max_occupancy` | ✔ | How many people the unit **sleeps**. Rooming is `ceil(guests ÷ this)`, so a 4-guest villa takes 7 units for 25 people while twins take 13. |
+---
 
-### `3-rates.csv`
+## Before you send
 
-| Column | Required | Notes |
-|---|---|---|
-| `property_name`, `room_type_name` | ✔ | Must match files 1 and 2 |
-| `meal_plan` | ✔ | `RO` room only · `BB` bed & breakfast · `HB` half board · `FB` full board · `AI` all inclusive |
-| `residence` | ✔ | `citizen` · `ea_resident` · `resident` (foreign national with a Kenyan permit) · `african_citizen` · `non_resident` |
-| `occupancy` | ✔ | How many guests **this price covers**. See trap 1. |
-| `season_name` | ✔ | The sheet's own wording — "High season", "Festive", "Green season" |
-| `valid_from` / `valid_to` | ✔ | ISO dates. One row per season window; rates are chosen per night, so a stay crossing seasons prices each night correctly and needs no special handling from you. |
-| `currency` | ✔ | `KES` or `USD` — as the sheet quotes it, not what we bill in |
-| `rate_per_night` | ✔ | As printed. No discount applied, no tax added. |
-| `rate_basis` | ✔ | `per_room` or `per_person_sharing`. See trap 2. |
-| `rate_kind` | ✔ | `sto` or `rack`. See trap 4. |
-| `supplier_discount_pct` | | The stated percentage, un-applied. See trap 4. |
-| `vat_basis` | ✔ | `inclusive` or `exclusive`. See trap 3. |
-| `vat_pct` | | Defaults to 16 |
-| `child_rate` | | Per child per night, if the sheet gives one |
-| `child_min_age` / `child_max_age` | | Only if this rate's band differs from the property's |
-| `min_nights` | | Minimum stay, if stated. A request that does not meet it is **not offered** — the property appears on the quotation as considered, with the minimum quoted back as the reason. |
-| `single_supplement` | | Only if the sheet states one **instead of** a single-occupancy price. It is recorded and flagged for review rather than added, because a per-room rate plus a per-person supplement usually means the sheet is priced per person sharing — see trap 2. |
-
-### `4-supplements.csv`
-
-For festive loadings and compulsory extras. **20 of 32 sheets carry one and 8 make a gala
-dinner compulsory**, so this file is usually not empty — and leaving it empty silently
-under-charges every December quote.
-
-| Column | Required | Notes |
-|---|---|---|
-| `property_name` | ✔ | |
-| `label` | ✔ | The sheet's wording, e.g. "Christmas Eve supplement" |
-| `kind` | ✔ | `festive` or `gala` |
-| `basis` | ✔ | `per_person_per_night` · `per_person` · `per_room_per_night` · `per_room`. **The amount is meaningless without this** — 3,300 per person per night and 3,300 per room are very different numbers. |
-| `amount`, `currency` | ✔ | As printed |
-| `valid_from` / `valid_to` | ✔ | The supplement's **own** window, which is usually narrower than the season containing it. Temple Point loads Christmas on 24–25 December inside a festive season running 20 Dec – 10 Jan. |
-| `is_mandatory` | ✔ | `yes` or `no`. A gala dinner is normally `yes` — charged whether or not the client asked. |
-| `room_type_name`, `meal_plan`, `residence` | | **Leave blank for "applies to everything"**, which is the usual case. Only fill them in if the sheet limits the supplement to one room type or plan. |
+- [ ] Every `EXAMPLE` row deleted
+- [ ] `property_name` spelled identically on all of that property's rows
+- [ ] A row for **each** occupancy the sheet prices, not one per room type
+- [ ] Discounts entered as a percentage beside the original rate, not subtracted from it
+- [ ] `vat` matches what the sheet actually states
+- [ ] Every date reads `YYYY-MM-DD`
+- [ ] Supplements entered, or genuinely confirmed to be none
+- [ ] The original PDF or photograph sent alongside
 
 ---
 
 ## What happens to it
 
-The figures are stored with the source named against them, so any price on a quotation can
-be traced back to the sheet it came from. VAT normalisation and the discount split happen
-on import, so what you type stays exactly what the supplier published — which is what makes
-the reconciliation possible.
+Figures are stored with their source named against them, so any price on a quotation can be
+traced back to the sheet it came from. VAT normalisation, the discount split and the
+per-person conversion all happen on import — what you type stays exactly what the supplier
+published, which is what makes that reconciliation possible.
 
-If a row cannot be imported you get told which row and why, and nothing partial is stored.
+If a row cannot be imported you are told which row and why, and nothing partial is stored.
 
-**Other costs are not in these files.** Park and conservation fees come from the KWS
-schedule and are already loaded. Transport, transfers and activity pricing have their own
-intake and arrive with Stage 3.10.
+Park and conservation fees come from the KWS schedule and are already loaded. Transport,
+transfers and activity pricing have their own intake.

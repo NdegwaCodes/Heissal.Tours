@@ -1,6 +1,0 @@
-property_name,room_type_name,meal_plan,residence,occupancy,season_name,valid_from,valid_to,currency,rate_per_night,rate_basis,rate_kind,supplier_discount_pct,vat_basis,vat_pct,child_rate,child_min_age,child_max_age,min_nights,single_supplement,notes
-EXAMPLE - delete this row,Creek Deluxe,FB,citizen,1,High season,2026-07-01,2026-10-31,KES,28400,per_room,sto,,inclusive,16,,,,,,Single occupancy - its own quoted price
-EXAMPLE - delete this row,Creek Deluxe,FB,citizen,2,High season,2026-07-01,2026-10-31,KES,37600,per_room,sto,,inclusive,16,14000,3,11,,,Double - NOT twice the single
-EXAMPLE - delete this row,Creek Deluxe,FB,non_resident,2,High season,2026-07-01,2026-10-31,USD,320,per_room,sto,,inclusive,16,,,,,,Non-resident rate in USD
-EXAMPLE - delete this row,Creek Deluxe,FB,citizen,2,Festive,2026-12-20,2027-01-10,KES,52000,per_room,rack,15,inclusive,16,,,,4,,"Rack less 15% - enter the 15, do NOT pre-apply it. Four-night minimum."
-EXAMPLE - delete this row,Two Bedroom Villa,HB,citizen,4,High season,2026-07-01,2026-10-31,KES,64000,per_room,rack,,exclusive,16,,,,,,Whole villa priced AT 4 guests; sheet was VAT-exclusive

@@ -1,4 +1,0 @@
-property_name,label,kind,basis,amount,currency,valid_from,valid_to,is_mandatory,vat_basis,vat_pct,room_type_name,meal_plan,residence,notes
-EXAMPLE - delete this row,Christmas Eve supplement,festive,per_person_per_night,3300,KES,2026-12-24,2026-12-25,yes,inclusive,16,,,,Two nights only - narrower than the festive season around it
-EXAMPLE - delete this row,New Year supplement,festive,per_person_per_night,3300,KES,2026-12-31,2027-01-01,yes,inclusive,16,,,,
-EXAMPLE - delete this row,Compulsory gala dinner,gala,per_person,7500,KES,2026-12-31,2026-12-31,yes,inclusive,16,,,,Charged whether or not the client asked for it

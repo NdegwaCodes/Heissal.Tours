@@ -1,2 +1,0 @@
-property_name,destination,category,star_rating,check_in_time,check_out_time,child_min_age,child_max_age,supplier_name,contact_email,contact_phone,website,notes
-EXAMPLE - delete this row,Diani,resort,4,1400,1000,3,11,Baobab Hotels Ltd,reservations@example.co.ke,+254700000000,https://example.co.ke,"Contract 2026/27, STO rates"

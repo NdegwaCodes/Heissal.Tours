@@ -1,0 +1,10 @@
+row_type,property_name,destination,room_type,room_sleeps,meal_plan,guest_residence,price_covers,label,valid_from,valid_to,currency,amount,charged_per,rack_or_sto,discount_percent,vat,child_amount,child_ages,min_nights,notes
+RATE,EXAMPLE Temple Point - delete these rows,Watamu,Creek Deluxe,2,FB,citizen,1,High season,2026-07-01,2026-10-31,KES,28400,room_per_night,sto,,inclusive,,,,Single occupancy - its own quoted price
+RATE,EXAMPLE Temple Point - delete these rows,Watamu,Creek Deluxe,2,FB,citizen,2,High season,2026-07-01,2026-10-31,KES,37600,room_per_night,sto,,inclusive,14000,3-11,,Double - NOT twice the single
+RATE,EXAMPLE Temple Point - delete these rows,Watamu,Creek Deluxe,2,FB,non_resident,2,High season,2026-07-01,2026-10-31,USD,320,room_per_night,sto,,inclusive,,,,Non-residents quoted in USD
+RATE,EXAMPLE Temple Point - delete these rows,Watamu,Creek Deluxe,2,FB,citizen,2,Festive,2026-12-20,2027-01-10,KES,52000,room_per_night,rack,15,inclusive,,,4,"Rack less 15% - enter the 15, do NOT subtract it yourself"
+RATE,EXAMPLE Temple Point - delete these rows,Watamu,Two Bedroom Villa,4,HB,citizen,4,High season,2026-07-01,2026-10-31,KES,64000,room_per_night,rack,,exclusive,,,,Whole villa priced AT 4 guests; this sheet was VAT-exclusive
+RATE,EXAMPLE Turtle Bay - delete these rows,Watamu,Garden Room,2,AI,citizen,2,Low season,2026-04-01,2026-06-30,KES,9500,person_per_night,rack,,inclusive,,,,"Sheet says ""per person sharing"" - so person_per_night, not room_per_night"
+SUPPLEMENT,EXAMPLE Temple Point - delete these rows,Watamu,,,,,,Christmas Eve supplement,2026-12-24,2026-12-25,KES,3300,person_per_night,,,inclusive,,,,Two nights only - narrower than the festive season around it
+SUPPLEMENT,EXAMPLE Temple Point - delete these rows,Watamu,,,,,,Compulsory gala dinner,2026-12-31,2026-12-31,KES,7500,person_per_stay,,,inclusive,,,,Charged whether or not the client asks for it
+EXTRA,EXAMPLE Temple Point - delete these rows,Watamu,,,,,,Sunset dhow cruise,2026-07-01,2026-10-31,KES,4500,person_per_stay,,,inclusive,,,,Offered as an optional add-on - never charged unless chosen
