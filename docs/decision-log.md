@@ -614,3 +614,49 @@ entry is **per person per day** (which is why the basis table separates nights f
 Lewa charges a different figure for a day visitor than for an overnight guest. Also recorded
 but not charged yet: the KWS vehicle seat-band levy, 4,500 a day for a 25–44 seater, which
 lands on any quote that drives into a park and is exactly the line that gets forgotten.
+
+**The brand faces are embedded, not linked** (Stage 3.11, 2026-08-25)
+Cormorant Garamond and Libre Franklin arrived from the client, closing §9's first open
+question. They are committed to the repo and inlined as data URIs rather than pulled from
+Google Fonts, because the print path is where a linked face fails worst: the PDF renderer
+opens a local `file://` page in headless Chromium, and a font request that does not resolve
+still produces a document — in a fallback face, at different metrics, with nothing raised.
+Same reasoning as the photographs in 3.6. A missing file is skipped rather than fatal (a
+document in the wrong face beats no document), and `missing_faces()` exists because that
+failure is invisible by nature.
+
+**Three font files, not nine** (Stage 3.11, 2026-08-25)
+Downloading the five Cormorant weights the client listed produced five byte-identical files.
+Both families are variable fonts, so one file per style covers the whole declared range —
+400–700 for Cormorant, 300–700 for Libre Franklin. 112 KB instead of 302 KB, embedded in
+every rendered document, and every intermediate weight works rather than snapping to the
+five that happened to be requested.
+
+**The "no font may be named outside the two variables" rule paid for itself**
+(Stage 3.11, 2026-08-25)
+Swapping placeholders for the real faces was a two-line edit to `DocumentConfig`, because
+3.5 forbade the template from naming a typeface anywhere except two CSS custom properties and
+a test enforced it. That test needed one amendment — `@font-face` legitimately names
+families — which is the distinction between declaring a face and applying one.
+
+**The client's type scale overflowed three pages, and the space came out of imagery**
+(Stage 3.11, 2026-08-25)
+The specified sizes are substantially larger than the template was built for: a 52.5pt cover
+headline against 30pt, 33pt property names against 26pt. Applying them pushed the running
+footer off three pages, each of which then took a sheet of its own carrying nothing but that
+footer. The fix was to give the space back from the option pages' imagery (hero 52→44mm,
+gallery 26→22mm) and from leading that was too loose for display type at these sizes — the
+closing tagline was set at 1.7, which is body leading. The type the client specified was not
+touched.
+
+Found by rendering and measuring rather than by reading the CSS: an ink-extent check over the
+rasterised pages showed content ending at 91% of a page whose safe area stops at 87%. The
+page count is asserted exactly, not bounded, because a silent extra page is precisely this
+bug — a sheet with nothing on it but the footer.
+
+**px at 96dpi is the right reading of the client's spec** (Stage 3.11, 2026-08-25)
+The scale arrived in px with no artboard size stated, which is ambiguous: the same 70px is a
+different size on a 794px A4 artboard than on a 1240px one. Body text at 14px settles it —
+14px is exactly 10.5pt at 96dpi, which is the print convention the template already used and
+an unlikely coincidence. Every value is therefore the client's figure x 0.75, and the
+derivation is recorded beside the scale so it can be re-checked rather than re-guessed.

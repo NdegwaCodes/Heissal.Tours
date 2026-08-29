@@ -24,6 +24,7 @@ from app.core.config import settings
 from app.core.errors import AppError, ConflictError, NotFoundError
 from app.integrations.pdf_render import PdfRenderError, PdfRenderProvider
 from app.modules.documents.config import DOCUMENT_SETTINGS_KEY, DocumentConfig
+from app.modules.documents.fonts import face_css
 from app.modules.documents.pdf import default_renderer
 from app.modules.documents.viewmodel import QuotationView, QuotationViewBuilder
 from app.modules.quotes.models import Quote, QuoteVersion
@@ -134,7 +135,12 @@ class QuotationDocumentService:
         )
         page = PAGE_SIZES.get(view.config.page_size, PAGE_SIZES["A4"])
         template = environment().get_template("quotation.html.j2")
-        return template.render(view=view, page=page)
+        # Embedded rather than linked even when assets are otherwise linked: a
+        # font is not an image. An <img> that fails leaves a visible hole, while
+        # a face that fails silently re-sets the whole document at different
+        # metrics — so there is no preview mode in which linking them is the
+        # better trade.
+        return template.render(view=view, page=page, fonts_css=face_css())
 
     async def render_pdf(
         self, quote_id: uuid.UUID, *, version_number: int | None = None

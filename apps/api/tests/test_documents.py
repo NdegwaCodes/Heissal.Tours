@@ -577,17 +577,21 @@ async def test_user_entered_text_is_escaped(client, admin_tokens, sample_catalog
 async def test_every_font_comes_from_one_of_the_two_variables(
     client, admin_tokens, sample_catalogue
 ):
-    """The placeholder swap has to stay a two-line change.
+    """The discipline that made the brand-font swap a two-line change.
 
-    The real brand faces are not available yet, so the template names fonts in
-    exactly two places and reaches them everywhere else through custom
-    properties. This asserts that discipline rather than trusting a comment: a
-    stray ``font-family: Georgia`` deep in the markup is what turns the eventual
-    swap into a hunt.
+    It paid off on 2026-08-25: replacing the placeholders with Cormorant Garamond
+    and Libre Franklin touched DocumentConfig and nothing else, because every
+    rule in the template reaches type through one of two custom properties. A
+    stray ``font-family: Georgia`` deep in the markup is what would have turned
+    that into a hunt.
+
+    The ``@font-face`` block is excluded: it necessarily names families, being
+    where the embedded faces are declared rather than where type is applied.
     """
     h = _h(admin_tokens)
     quote, _ = await _issued_quote(client, h, sample_catalogue)
     html = await _render(client, h, quote["id"])
+    html = re.sub(r"@font-face\{[^}]*\}", "", html)
 
     declarations = re.findall(r"font-family:\s*([^;}\n]+)", html)
     indirect = [d for d in declarations if d.strip().startswith("var(--font-")]

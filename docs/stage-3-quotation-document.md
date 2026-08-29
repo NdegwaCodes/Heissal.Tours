@@ -752,11 +752,11 @@ ask "what did we quote in June and what did it become" without a data warehouse.
 
 ## 9. Open questions
 
-1. **The real font files** — being supplied. Until then the template runs on labelled
-   placeholders behind `--font-display` / `--font-body` (§3.11). If the sample was built
-   in Claude Design, the artboard's own CSS names the faces; failing that, the PDF's
-   embedded font table lists them (Acrobat → Document Properties → Fonts, or extract the
-   `/BaseFont` entries from the file).
+1. ~~**The real font files**~~ — **closed 2026-08-25.** Cormorant Garamond for display
+   (cover headline, section headings, property names, price figures, italic taglines) and
+   Libre Franklin for body and UI, with the client's full px type scale. Both are committed
+   as variable woff2 under `app/modules/documents/fonts/` and embedded as data URIs; see
+   §13.
 2. **Airport transfers** — assumed still quotable for a client who books their own
    flight, since the transfer is a road service even though the ticket is not ours to
    sell (§3.8). Confirm, or exclude anything air-adjacent entirely.
@@ -912,3 +912,52 @@ asked for group-level costing, which this gives, without inheriting that defect.
 One consequence to hold on to: rounding up is applied per person and then multiplied out, so
 the slack above cost is up to one rounding step **per traveller** — as much as 2,500 on a
 25-person booking.
+
+---
+
+## 13. Typography (§3.11 — confirmed 2026-08-25)
+
+| Role | Face | Where |
+|---|---|---|
+| Display | **Cormorant Garamond**, 400–700 + italic | cover headline, section headings, property names, price figures, at-a-glance values, italic taglines and VAT footnotes |
+| Body / UI | **Libre Franklin**, 300–700 | paragraphs, spec-grid labels and values, tables, checklists, contact details, uppercase letterspaced eyebrows |
+
+### 13.1 The files are in the repo
+
+Three variable woff2 files in `app/modules/documents/fonts/`, embedded as data URIs by
+`fonts.py`. Not linked from Google Fonts: the PDF renderer opens a local `file://` page, so
+an unresolvable font request yields a proposal set in a fallback at different metrics with no
+error raised — the same reasoning that made photographs self-contained in 3.6.
+
+Three files rather than nine because both families are variable; the five Cormorant weights
+the client listed download as five identical files. 112 KB, and every intermediate weight
+works.
+
+### 13.2 The scale
+
+Specified in px on a 96dpi A4 artboard, so every template value is that figure **× 0.75**.
+Body at 14px → 10.5pt is what identifies the artboard: it lands exactly on the print
+convention the template already used.
+
+Held as `--fs-*` custom properties at the top of the template. Two things to know before
+editing them:
+
+- `--fs-heading` (42px) is **larger** than `--fs-title` (40px). Not a mistake to tidy — they
+  are different page roles in the reference: a section heading inside a page against the
+  title of a comparison or closing page.
+- Nothing in the template may name a font outside `--font-display` / `--font-body`, and a
+  test enforces it. That rule is why swapping the placeholders for the real faces was a
+  two-line edit to `DocumentConfig`.
+
+### 13.3 What the scale cost, and where the space came from
+
+The specified display sizes are much larger than the layout was built for, and applying them
+pushed the running footer off three pages — each then taking a sheet carrying nothing but
+that footer. The space was returned from **imagery** (option hero 52→44mm, gallery 26→22mm)
+and from **leading that was too loose for display type** (the closing tagline was set at 1.7,
+which is body leading). The client's type sizes were not altered.
+
+Verified by rendering and measuring, not by reading CSS: rasterise the pages and find the
+lowest inked row. Content was ending at 91% of a page whose safe area stops at 87%. The PDF
+page count is asserted exactly rather than bounded, because a silent extra page *is* this
+bug.

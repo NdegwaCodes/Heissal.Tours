@@ -2,11 +2,14 @@
   The quotation document (design doc §3.11), section by section against the
   reference proposal.
 
-  TYPE IS A DECLARED PLACEHOLDER. The brand faces are not available yet, so the
-  two stacks below are close equivalents — a high-contrast display serif and a
-  humanist sans — reached only through --font-display and --font-body. Swapping
-  in the real files is an edit to DocumentConfig, not a hunt through this file.
-  Nothing else in this template may name a font.
+  TYPE. Cormorant Garamond for display, Libre Franklin for body — the brand
+  faces, confirmed 2026-08-25. They are reached only through --font-display and
+  --font-body, and NOTHING ELSE IN THIS TEMPLATE MAY NAME A FONT. That rule is
+  what made replacing the placeholders a two-line edit to DocumentConfig.
+
+  The faces are embedded as data URIs, not linked: the PDF path renders a local
+  file:// page, so a network font request that fails leaves the document set in
+  a fallback at different metrics with no error raised.
 
   This template is handed a QuotationView and nothing else. That view model has
   no field for cost, margin, supplier payments, contingency, profit or the agent
@@ -22,8 +25,11 @@
 <meta charset="utf-8">
 <title>{{ view.quote_number }} — {{ view.title }}</title>
 <style>
+  /* The brand faces, embedded so the document carries its own typography. Both
+     are variable, so one file per style covers the whole weight range. */
+  {{ fonts_css | safe }}
+
   :root {
-    /* ---- Type: PLACEHOLDERS until the brand files arrive (§3.11) ---- */
     /* Unescaped on purpose: HTML-escaping the quotes in a font stack yields
        invalid CSS and drops the face. DocumentConfig restricts these two
        values to a font-stack charset, which is what makes it safe. */
@@ -42,6 +48,42 @@
     --cream-tint: #f8f4ec;    /* the recommended row */
     --hairline: #e3ddd0;
 
+
+    /* ---- Type scale, from the client's specification of the reference
+       proposal (2026-08-25). Stated there in px on a 96dpi A4 artboard, so
+       every value here is that figure x 0.75. Body at 14px -> 10.5pt is what
+       confirms the artboard: 10.5pt is the print convention it lands on
+       exactly.
+
+       Note --fs-heading (42px) is LARGER than --fs-title (40px). That is not a
+       mistake to tidy: they are different page roles in the reference — a
+       section heading inside a page against the title of a comparison or
+       closing page — and the client set them that way. ---- */
+    --fs-cover:     52.5pt;  /* 70px  cover headline */
+    --fs-cover-sub: 17.25pt; /* 23px  cover italic tagline */
+    --fs-wordmark:  16.5pt;  /* 22px  brand lockup */
+    --fs-heading:   31.5pt;  /* 42px  page headings */
+    --fs-title:     30pt;    /* 40px  comparison / Wasini / closing headings */
+    --fs-property:  33pt;    /* 44px  property names */
+    --fs-stat:      18pt;    /* 24px  at-a-glance values, subheads, closing tagline */
+    --fs-card:      19.5pt;  /* 26px  index card names, contact panel name */
+    --fs-price:     28.5pt;  /* 38px  per-person figure */
+    --fs-price-sum: 22.5pt;  /* 30px  group total */
+    --fs-leg:       21pt;    /* 28px  transport leg values */
+    --fs-pax:       30pt;    /* 40px  "25 Pax" */
+    --fs-vat:       10.5pt;  /* 14px  italic VAT footnotes */
+
+    --fs-body:      10.5pt;  /* 14px  paragraphs */
+    --fs-desc:      9.75pt;  /* 13px  property descriptions, contact details */
+    --fs-note:      9.4pt;   /* 12.5px sub-notes, notice boxes */
+    --fs-tick:      9.8pt;   /* 13px  checklists */
+    --fs-value:     10.5pt;  /* 14px  spec-grid values */
+    --fs-label:     7.1pt;   /* 9.5px spec-grid labels, table headers */
+    --fs-eyebrow:   8.25pt;  /* 11px  section eyebrows */
+    --fs-table:     9pt;     /* 12px  table body */
+    --fs-chip:      6pt;     /* 8px   "Recommended" chip */
+    --fs-fine:      8.6pt;   /* 11.5px closing disclaimer */
+
     --page-w: {{ page.width }};
     --page-h: {{ page.height }};
     --page-pad: 18mm;
@@ -56,8 +98,8 @@
   body {
     margin: 0;
     font-family: var(--font-body);
-    font-size: 10.5pt;
-    line-height: 1.62;
+    font-size: var(--fs-body);
+    line-height: 1.7;
     color: var(--ink-soft);
     background: #edeae3;
     -webkit-print-color-adjust: exact;
@@ -90,31 +132,31 @@
 
   /* ---- Shared type ---- */
   .eyebrow {
-    font-size: 7.6pt;
-    letter-spacing: .19em;
+    font-size: var(--fs-eyebrow);
+    letter-spacing: .28em;
     text-transform: uppercase;
     color: var(--gold);
     margin: 0 0 6pt;
   }
   h1, h2, h3 {
     font-family: var(--font-display);
-    font-weight: 500;
+    font-weight: 600;
     color: var(--ink);
     margin: 0;
     /* The reference proposal sets its serif numerals as text figures. */
     font-variant-numeric: oldstyle-nums;
     font-feature-settings: "onum" 1;
   }
-  h1 { font-size: 30pt; line-height: 1.12; letter-spacing: -.005em; }
-  h2 { font-size: 22pt; line-height: 1.16; margin-bottom: 10pt; }
-  h3 { font-size: 15pt; line-height: 1.2; }
+  h1 { font-size: var(--fs-title); line-height: 1.12; letter-spacing: -.005em; }
+  h2 { font-size: var(--fs-heading); line-height: 1.16; margin-bottom: 10pt; }
+  h3 { font-size: var(--fs-stat); line-height: 1.2; }
   p { margin: 0 0 10pt; max-width: 46em; }
   .lede { max-width: 40em; }
   .rule { height: 1px; background: var(--hairline); margin: 16pt 0; border: 0; }
   .serif-note {
     font-family: var(--font-display);
     font-style: italic;
-    font-size: 9pt;
+    font-size: var(--fs-vat);
     color: var(--gold);
     font-variant-numeric: oldstyle-nums;
   }
@@ -131,7 +173,7 @@
   }
   .wordmark {
     font-family: var(--font-display);
-    font-size: 15pt;
+    font-size: var(--fs-wordmark);
     color: var(--ink);
     letter-spacing: .005em;
   }
@@ -170,11 +212,12 @@
   }
   .hero > * { position: relative; z-index: 1; }
   .hero .eyebrow { color: rgba(255,255,255,.86); }
-  .hero h1 { color: #fff; }
+  /* The cover headline is the one piece of type set at full display size. */
+  .hero h1 { color: #fff; font-size: var(--fs-cover); line-height: .98; }
   .hero .subtitle {
     font-family: var(--font-display);
     font-style: italic;
-    font-size: 12.5pt;
+    font-size: var(--fs-cover-sub);
     color: rgba(255,255,255,.9);
     margin-top: 6pt;
   }
@@ -200,13 +243,13 @@
   .spec.plain { border: 0; gap: 8pt; }
   .spec.plain > div { background: transparent; border: 1px solid var(--hairline); }
   .cell-label {
-    font-size: 6.9pt;
-    letter-spacing: .17em;
+    font-size: var(--fs-label);
+    letter-spacing: .16em;
     text-transform: uppercase;
     color: var(--gold);
     margin-bottom: 3pt;
   }
-  .cell-value { font-size: 10pt; font-weight: 600; color: var(--ink); }
+  .cell-value { font-size: var(--fs-value); font-weight: 600; color: var(--ink); }
 
   /* Background and border sit on each CELL, not on the container: with five
      facts in a three-column grid the container would otherwise draw a sixth,
@@ -228,8 +271,8 @@
   }
   .glance .cell-value {
     font-family: var(--font-display);
-    font-size: 14pt;
-    font-weight: 400;
+    font-size: var(--fs-stat);
+    font-weight: 600;
     font-variant-numeric: oldstyle-nums;
   }
 
@@ -241,7 +284,7 @@
   }
   .panel .cell-label, .panel .eyebrow { color: var(--gold-soft); }
   .ticks { list-style: none; margin: 0; padding: 0; }
-  .ticks li { padding: 2.5pt 0 2.5pt 15pt; position: relative; font-size: 9.6pt; }
+  .ticks li { padding: 2.5pt 0 2.5pt 15pt; position: relative; font-size: var(--fs-tick); }
   .ticks li::before {
     content: "\2713";
     position: absolute;
@@ -257,17 +300,18 @@
     border-left: 3px solid var(--gold);
     padding: 10pt 12pt;
     margin: 12pt 0;
-    font-size: 9.4pt;
+    font-size: var(--fs-note);
   }
   .notice .cell-label { margin-bottom: 5pt; }
 
   /* ---- Option page ---- */
   .option-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14pt; }
+  .option-head h1 { line-height: 1.0; }
   .chip {
     display: inline-block;
     background: var(--panel);
     color: var(--panel-ink);
-    font-size: 7.2pt;
+    font-size: var(--fs-chip);
     letter-spacing: .16em;
     text-transform: uppercase;
     padding: 5pt 10pt;
@@ -282,7 +326,7 @@
   }
   .option-hero img { width: 100%; height: 100%; object-fit: cover; object-position: center; }
   .gallery { display: grid; gap: 6pt; margin-top: 6pt; }
-  .gallery div { height: 26mm; background: var(--cream); overflow: hidden; }
+  .gallery div { height: 22mm; background: var(--cream); overflow: hidden; }
   .gallery img { width: 100%; height: 100%; object-fit: cover; object-position: center; }
 
   .option-body { display: grid; grid-template-columns: 1.12fr .88fr; gap: 14pt; margin-top: 14pt; }
@@ -306,23 +350,23 @@
   }
   .price .amount {
     font-family: var(--font-display);
-    font-size: 25pt;
+    font-size: var(--fs-price);
     line-height: 1.1;
     color: #fff;
     font-variant-numeric: oldstyle-nums;
   }
-  .price .amount-sub { font-size: 8.6pt; color: var(--gold-soft); margin-top: 2pt; }
+  .price .amount-sub { font-size: var(--fs-price-sum); color: var(--gold-soft); margin-top: 2pt; }
   .price hr { border: 0; height: 1px; background: rgba(255,255,255,.22); margin: 11pt 0; }
   .included { border: 1px solid var(--hairline); padding: 11pt 13pt; margin-top: 8pt; }
 
   /* ---- Comparison table ---- */
-  table { width: 100%; border-collapse: collapse; font-size: 9.3pt; }
+  table { width: 100%; border-collapse: collapse; font-size: var(--fs-table); }
   thead th {
     background: var(--panel);
     color: var(--panel-ink);
     text-align: left;
     font-weight: 600;
-    font-size: 7.2pt;
+    font-size: var(--fs-label);
     letter-spacing: .15em;
     text-transform: uppercase;
     padding: 9pt 8pt;
@@ -343,14 +387,17 @@
   /* ---- Contact block ---- */
   .contact { display: grid; grid-template-columns: 1.1fr .9fr; gap: 12pt; margin-top: 14pt; }
   .contact .panel .field { margin-bottom: 9pt; }
-  .disclaimer { font-size: 8.2pt; color: var(--gold); margin-top: 14pt; }
+  .disclaimer { font-size: var(--fs-fine); color: var(--gold); margin-top: 8pt; }
   .tagline {
     font-family: var(--font-display);
     font-style: italic;
-    font-size: 15pt;
+    font-size: var(--fs-stat);
     color: var(--ink);
-    line-height: 1.7;
-    margin-top: 18pt;
+    /* 1.7 is body leading and far too loose for three lines of display italic;
+       it also cost the closing page its footer, which then took a sheet of its
+       own. Display type wants tighter leading as it grows. */
+    line-height: 1.26;
+    margin-top: 7pt;
   }
 
   .page-foot {
@@ -359,7 +406,7 @@
     display: flex;
     justify-content: space-between;
     align-items: baseline;
-    font-size: 7.6pt;
+    font-size: var(--fs-label);
     letter-spacing: .1em;
     text-transform: uppercase;
     color: var(--gold);
@@ -440,7 +487,7 @@
   <p class="lede" style="margin-top:12pt">{{ view.transport.summary }}</p>
 
   {% if view.transport.hero %}
-  <div class="option-hero" style="height:52mm">
+  <div class="option-hero" style="height:44mm">
     <img src="{{ view.transport.hero.url }}" alt="{{ view.transport.hero.alt }}">
   </div>
   {% endif %}
@@ -450,7 +497,7 @@
     {% for leg in view.transport.legs %}
     <div>
       <div class="cell-label">{{ leg.route }}</div>
-      <div class="cell-value" style="font-family:var(--font-display);font-weight:400;font-size:13pt">{{ leg.note }}</div>
+      <div class="cell-value" style="font-family:var(--font-display);font-weight:400;font-size:var(--fs-leg)">{{ leg.note }}</div>
     </div>
     {% endfor %}
   </div>
@@ -458,11 +505,11 @@
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:12pt;margin-top:12pt">
     <div class="panel">
       <div class="cell-label">Complete round-trip group transfers</div>
-      <div style="font-family:var(--font-display);font-size:15pt;color:#fff">Included in packages</div>
+      <div style="font-family:var(--font-display);font-size:var(--fs-stat);color:#fff">Included in packages</div>
     </div>
     <div style="border:1px solid var(--hairline);padding:14pt 16pt">
       <div class="cell-label">Group capacity</div>
-      <div style="font-family:var(--font-display);font-size:19pt;color:var(--ink);font-variant-numeric:oldstyle-nums">{{ view.transport.capacity }}</div>
+      <div style="font-family:var(--font-display);font-size:var(--fs-pax);color:var(--ink);font-variant-numeric:oldstyle-nums">{{ view.transport.capacity }}</div>
     </div>
   </div>
 
@@ -490,7 +537,7 @@
         {% if option.is_recommended %}<span class="chip">Recommended</span>{% endif %}
       </div>
       <h3 style="margin-top:6pt">{{ option.name }}</h3>
-      <div style="font-size:9pt;color:var(--ink-soft);margin-top:4pt">{{ option.tagline }}</div>
+      <div style="font-size:var(--fs-desc);color:var(--ink-soft);margin-top:4pt">{{ option.tagline }}</div>
     </div>
     {% endfor %}
   </div>
@@ -507,7 +554,7 @@
   <div class="option-head">
     <div>
       <div class="eyebrow">Option {{ option.number }}</div>
-      <h1 style="font-size:26pt">{{ option.name }}</h1>
+      <h1 style="font-size:var(--fs-property)">{{ option.name }}</h1>
       <div class="eyebrow" style="margin-top:6pt;color:var(--ink-soft)">{{ option.tagline }}</div>
     </div>
     {% if option.is_recommended %}<span class="chip">&#9733; Recommended</span>{% endif %}
@@ -567,7 +614,7 @@
 {% if view.comparison %}
 <section class="page">
   <div class="eyebrow">Comparison</div>
-  <h1 style="font-size:26pt">At a Glance — Accommodation Options</h1>
+  <h1>At a Glance — Accommodation Options</h1>
 
   <table style="margin-top:14pt">
     <thead>
@@ -620,7 +667,7 @@
 {% for experience in view.experiences %}
 <section class="page">
   <div class="eyebrow">{% if experience.is_optional %}Optional signature experience{% else %}Signature experience{% endif %}</div>
-  <h1 style="font-size:26pt">{{ experience.name }}</h1>
+  <h1>{{ experience.name }}</h1>
   {% if experience.description %}<p class="lede" style="margin-top:12pt">{{ experience.description }}</p>{% endif %}
 
   {% if experience.images %}
@@ -676,7 +723,7 @@
 {# ============================ Next steps ============================ #}
 <section class="page">
   <div class="eyebrow">Next steps</div>
-  <h1 style="font-size:26pt">{{ view.config.next_steps_heading }}</h1>
+  <h1>{{ view.config.next_steps_heading }}</h1>
   <p class="lede" style="margin-top:12pt">{{ view.config.next_steps_body }}</p>
 
   {% if view.config.coordination_points %}
@@ -693,7 +740,7 @@
 
   <div class="contact">
     <div class="panel">
-      <div style="font-family:var(--font-display);font-size:16pt;color:#fff;margin-bottom:10pt">{{ view.config.company_name }}</div>
+      <div style="font-family:var(--font-display);font-size:var(--fs-card);color:#fff;margin-bottom:10pt">{{ view.config.company_name }}</div>
       <div class="field">
         <div class="cell-label">Email</div>
         <div>{{ view.config.contact_email }}</div>
@@ -709,7 +756,7 @@
     </div>
     <div style="border:1px solid var(--hairline);padding:14pt 16pt">
       <div class="cell-label">This proposal</div>
-      <div style="font-family:var(--font-display);font-size:15pt;color:var(--ink);font-variant-numeric:oldstyle-nums">{{ view.quote_number }}</div>
+      <div style="font-family:var(--font-display);font-size:var(--fs-card);color:var(--ink);font-variant-numeric:oldstyle-nums">{{ view.quote_number }}</div>
       <hr class="rule" style="margin:11pt 0">
       <div class="cell-label">Issued</div>
       <div style="margin-bottom:8pt">{{ view.issued_on.strftime('%d %B %Y') }}</div>

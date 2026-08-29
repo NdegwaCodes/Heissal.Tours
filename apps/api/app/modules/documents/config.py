@@ -23,6 +23,8 @@ import re
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.modules.documents.fonts import font_stack
+
 DOCUMENT_SETTINGS_KEY = "document"
 
 # A CSS font stack and nothing else — see the validator below for why this
@@ -115,17 +117,19 @@ class DocumentConfig(BaseModel):
     vat_note: str = Field(default="All prices inclusive of 16% VAT")
 
     # --- Type ------------------------------------------------------------- #
-    # The real faces are not available yet, so these are labelled placeholders
-    # (design doc §3.11): a high-contrast display serif and a humanist sans. They
-    # reach the template as two CSS custom properties, so swapping in the brand
-    # fonts is an edit here rather than a hunt through the markup.
-    font_display: str = Field(
-        default="'Playfair Display', 'Prata', 'Didot', Georgia, serif"
-    )
-    font_body: str = Field(
-        default="'Lato', 'Source Sans 3', 'Segoe UI', system-ui, sans-serif"
-    )
-    fonts_are_placeholders: bool = Field(default=True)
+    # The brand faces, confirmed by the client 2026-08-25 and closing §3.11's
+    # first open question. Cormorant Garamond carries display — the cover
+    # headline, section headings, property names, price figures and the italic
+    # taglines; Libre Franklin carries everything read rather than looked at.
+    #
+    # The whole template reaches type through exactly these two values, which is
+    # why swapping the placeholders for the real faces was an edit here and not a
+    # hunt through the markup. The files themselves are embedded rather than
+    # linked — see ``app.modules.documents.fonts`` for why that matters at print
+    # time.
+    font_display: str = Field(default=font_stack("Cormorant Garamond"))
+    font_body: str = Field(default=font_stack("Libre Franklin"))
+    fonts_are_placeholders: bool = Field(default=False)
 
     @field_validator("font_display", "font_body")
     @classmethod
