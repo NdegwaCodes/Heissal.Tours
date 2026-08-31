@@ -58,3 +58,10 @@ Thumbs.db
 # and must never enter git history.
 apps/api/var/
 var/uploads/
+
+# Filled-in rate intake workbooks. The blank template and its guide are tracked;
+# anything an agent has actually typed supplier rates into is confidential and
+# must never enter git history — same rule as the uploaded sheets above.
+docs/templates/rate-intake/*.xlsx
+docs/templates/rate-intake/*.xls
+docs/templates/rate-intake/filled/

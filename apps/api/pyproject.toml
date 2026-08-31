@@ -27,6 +27,13 @@ dependencies = [
     # autoescaping is not optional when property blurbs and client names are
     # user-entered text.
     "jinja2>=3.1",
+    # Reads the filled-in rate intake workbooks. Agents open the CSV template in
+    # Excel and save as .xlsx, which is the format the data actually arrives in.
+    # A stdlib zipfile+ElementTree reader works for text cells but not for real
+    # Excel dates, which arrive as serial numbers a hand-rolled reader has to
+    # detect from number formats — that is exactly the silent wrong-date failure
+    # the intake guide warns about, so it is worth a declared dependency.
+    "openpyxl>=3.1",
 ]
 
 [dependency-groups]

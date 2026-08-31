@@ -1,6 +1,7 @@
 # Hotel rate intake — one sheet
 
-**`hotel-rates.csv`** — open it in Excel or Google Sheets, fill it in, save as CSV UTF-8.
+**`hotel-rates.csv`** — open it in Excel or Google Sheets and fill it in. Save as
+**.xlsx or CSV UTF-8**; both import.
 
 One row per price. Property and room details repeat down the rows, which is deliberate:
 copying a property name into five rows is less work and far less error-prone than keeping
@@ -9,6 +10,26 @@ four files in step by hand.
 Delete the `EXAMPLE` rows before sending.
 
 ---
+
+## If a sheet publishes both a rack rate and an agent NETT
+
+Put **one row**, not two. Enter the rack figure in `amount` and the concession in
+`discount_percent`:
+
+| Sheet says | `rack_or_sto` | `discount_percent` | `amount` |
+|---|---|---|---|
+| "Rack 450. Agent NETT 360 (rack less 20%)" | `rack` | `20` | `450` |
+
+Two rows for the same room-night also work — the importer recognises a rack/NETT pair and
+folds them into one rate, deriving the percentage as `1 - nett/rack`. But one row is less
+typing and unambiguous.
+
+What does **not** work is entering only the NETT figure and calling it `sto` with no
+discount. That tells the system we pay 360 and the client should be costed 360, so the
+concession is handed to the client in full instead of split. Half of it is Heissal's margin.
+
+Three or more rates for the same room-night can't be resolved and are left out with a report,
+so don't use extra rows to record anything other than a rack/NETT pair.
 
 ## `row_type` — the first column, and the only one that changes what the others mean
 
@@ -83,11 +104,20 @@ pre-netted rate cannot be. And a stated discount on a rack rate is **halved** to
 — they see half the concession, Heissal keeps the other half — which only works if the
 system knows the original figure. Enter 20,400 and that margin is gone without a trace.
 
-### 5. Dates are `YYYY-MM-DD`, always
+### 5. Dates: be consistent, and `YYYY-MM-DD` is safest
 
-`2026-07-01`, never `01/07/2026`. Excel reads day-first or month-first depending on the
-machine's locale, and `03/04/2026` is valid under both — so the error does not announce
-itself, it just prices your April stay at March rates.
+`2026-07-01` leaves nothing to interpret. `01/07/2026` does: Excel reads day-first or
+month-first depending on the machine's locale, and `03/04/2026` is valid under both — so the
+error does not announce itself, it just prices your April stay at March rates.
+
+Day-first `DD/MM/YYYY` is accepted, because that is what the sheets actually arrive in. The
+importer works out which order a file uses by looking for dates whose first number is above
+12, and reports what it decided. Two rules follow from that:
+
+- **Never mix the two orders in one sheet.** If a file contains both, every date in it is
+  suspect and nothing is imported.
+- If no date in the sheet has a number above 12, the order genuinely cannot be told from the
+  data. It is read as day-first and flagged — check a few before relying on it.
 
 If Excel keeps reformatting a date column, set that column's format to **Text** before
 typing.
@@ -136,6 +166,23 @@ correctly with no special handling from you. Just give each season its own row.
 - [ ] The original PDF or photograph sent alongside
 
 ---
+
+## What the importer will and will not fill in for you
+
+**Forgiving about spelling.** `B&B` and `BB`, `BO` and `RO`, `STO` and `sto`, `Non-Resident`
+and `non_resident` — all the same thing. None of those change a number, so none of them are
+worth rejecting a sheet over.
+
+**Strict about missing figures.** A row with no validity window, no `price_covers`, no
+`room_type` or an unrecognised `meal_plan` is **left out and reported**. A guessed season
+window is a price the supplier never quoted, and it would go on to price real quotes.
+
+**`room_sleeps` can be left blank.** Capacity is taken as the largest `price_covers` on that
+room type, and every inference is listed in the report so you can correct it. Fill it in where
+a room sleeps more people than any rate prices for.
+
+**Everything is re-importable.** Fix the sheet, import again: rates that already exist are
+updated in place rather than duplicated.
 
 ## What happens to it
 

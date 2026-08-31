@@ -660,3 +660,60 @@ different size on a 794px A4 artboard than on a 1240px one. Body text at 14px se
 14px is exactly 10.5pt at 96dpi, which is the print convention the template already used and
 an unlikely coincidence. Every value is therefore the client's figure x 0.75, and the
 derivation is recorded beside the scale so it can be re-checked rather than re-guessed.
+
+**A rack row and its NETT twin are one rate, not two** (Stage 3.12, 2026-08-29)
+The most valuable thing the rate importer does. Real sheets publish both figures and agents
+transcribe both, so a room-night arrives as two rows: "450, rack" and "360, sto — Published
+Agent NETT = rack less 20%". In the client's 3,161-row workbook that is **649 room-nights**,
+and the `discount_percent` column was blank on every one of them because the sheets state the
+concession in prose.
+
+They are not duplicates, and neither row alone is right. The rack row alone quotes the client
+450 and believes we pay 450, discarding the whole concession from margin. The NETT row alone
+costs the client 360 and hands them all of it. §3.5 already models this as one row — rack plus
+a percentage — so the pair is collapsed into exactly that, with the percentage derived as
+`1 - nett/rack`. The derived figure is round-tripped against the published NETT and any
+penny-level disagreement is reported rather than absorbed.
+
+Anything that is not a clean rack/NETT pair — three rates for one room-night, two rack rows,
+37 groups in this corpus — is a conflict the importer must not resolve by picking one. Those
+are reported and left out.
+
+**Date order is decided from the file, never assumed** (Stage 3.12, 2026-08-29)
+`11/01/2027` is a valid date under both readings and the wrong one prices April at March
+rates without complaining. Only a component above 12 carries information, so the importer
+counts those across the whole sheet before parsing anything: 2,820 of the client's dates are
+day-first and none month-first, which settles it. A sheet containing both readings imports
+*nothing* — every date in it is suspect. A sheet where no date has a component above 12 is
+genuinely ambiguous and says so.
+
+**The importer refuses to invent, and defaults only labels** (Stage 3.12, 2026-08-29)
+A row missing its validity window, occupancy, room type or meal plan is rejected and
+reported, never defaulted: a guessed season window is a price the supplier never quoted and
+it would price real quotes. 200 of 3,161 rows fail this way, concentrated in three properties.
+The one thing defaulted is a rate's season *name*, because "Standard" is a label rather than a
+figure — but a supplement's label is **required**, since that text is what a client reads, and
+defaulting it both printed "Standard" on a proposal and silently collapsed 43 distinct extras
+onto one natural key.
+
+**Rejections are counted and reported by property, not by row number** (Stage 3.12,
+2026-08-29)
+Two reporting bugs found by reading my own output. `accepted` counted *problems* rather than
+rows — a row missing both dates yields two — which overstated the damage by a third. And a
+list of row numbers spanning nine properties is not actionable: nobody fixes "row 1039", they
+fix a rate sheet. Rejections now carry the property name and are grouped by it.
+
+**room_sleeps and price_covers are both lower bounds on capacity** (Stage 3.12, 2026-08-29)
+The obvious rule — trust `room_sleeps` where stated — is wrong against real data: in the
+client's workbook that column mirrors `price_covers` row by row (the single row says 1, the
+double row of the same room says 2) rather than stating the room's capacity. Treating either
+as authoritative produced two dozen false conflicts on one property. A room priced for two
+guests sleeps at least two; that is all either column proves, so the maximum across both is
+the honest floor. Erring low is the safe direction, since too small a capacity books *more*
+rooms and over-quotes visibly where too large under-quotes silently.
+
+**Filled-in workbooks are gitignored** (Stage 3.12, 2026-08-29)
+The blank template and its guide are tracked; anything an agent has typed supplier rates into
+is confidential and must never enter git history — the same rule as the uploaded sheets. The
+importer is verified against a throwaway database (`tours_intake_test`) rather than the suite's
+`tours_test`, so 2,800 real rates cannot pollute the fixtures every test depends on.

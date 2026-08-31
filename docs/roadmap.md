@@ -98,6 +98,23 @@ backend-only and the client sees per-person and group totals only.
     to **correct** a wrong row rather than skip it forever
   - ☐ **Remaining:** the cohort schema, wiring `OptionPricingService` onto the vector, and
     bringing park fees, mandatory activities and child rates into a price for the first time
+- ☑ 3.12 Rate importer (`app/modules/rate_intake/`, 50 tests) — reads a filled-in intake sheet
+  from .xlsx or .csv, normalises it, and writes destinations, properties, room types, rates and
+  supplements with a two-pass dry-run/commit split. Verified against the client's real 3,161-row
+  workbook (2026-08-29): **2,961 rows accepted, 2,170 rates, 30 properties, 11 destinations**,
+  loaded into a throwaway `tours_intake_test` and priced end to end.
+  - The importer's most valuable behaviour: **649 room-nights arrive as a rack row plus its
+    agent-NETT twin**, which §3.5 models as one row carrying a derived discount. Keeping either
+    row alone loses real money in opposite directions — see decision log
+  - Date order is decided from the file, not assumed; a sheet mixing both orders imports nothing
+  - 200 rows rejected rather than defaulted (missing validity window, occupancy, room type),
+    concentrated in three properties, and reported **by property** because a row number is not
+    actionable
+  - Filled-in workbooks are gitignored: the blank template is tracked, typed supplier rates
+    never enter git history
+  - **Open with the client:** 200 rows need dates or occupancy filling in; `EUR` appears on 30
+    rows with no EUR→KES rate on file; three destination spellings may be the same place
+  - **Not yet loaded into the live catalogue** — awaiting the go-ahead
   - **Open with the client:** the KWS MICE group-discount ladder is ambiguous and is shipped
     switched off (see decision log); Mara conservancy fees are often already inside a lodge
     rate, which is a double-charge risk once conservancies are priced
