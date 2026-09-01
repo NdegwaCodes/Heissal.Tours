@@ -51,6 +51,21 @@ RESIDENCE_SYNONYMS: dict[str, str] = {
 
 ROW_TYPES = frozenset({"RATE", "SUPPLEMENT", "EXTRA"})
 
+
+def row_kind(row: object) -> str:
+    """What kind of row this is, treating a blank ``row_type`` as ``RATE``.
+
+    A blank first column is the overwhelmingly common typo — an agent fills in
+    the price columns and skips the one that never varies — and a row carrying a
+    room, a meal plan and an amount is unambiguously a rate. Defaulting is
+    therefore safe, but it has to be done in *one* place: the two passes over a
+    sheet each decided this for themselves and disagreed, so a whole property's
+    rates imported while its room capacities were inferred from nothing.
+    """
+    if not isinstance(row, dict):
+        return key(row) or "RATE"
+    return key(row.get("row_type")) or "RATE"
+
 # How the intake's charging vocabulary maps onto what each table stores. Rates
 # are always per night in the catalogue, so a per-stay rate is not expressible
 # and is refused rather than silently converted.

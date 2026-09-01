@@ -80,6 +80,7 @@ class IntakeReport:
     supplements_duplicate: int = 0
     rack_net_merged: int = 0
     conflicts: list[str] = field(default_factory=list)
+    label_variants: list[str] = field(default_factory=list)
 
     derived_capacity: dict[str, int] = field(default_factory=dict)
     currencies: Counter[str] = field(default_factory=Counter)
@@ -113,6 +114,7 @@ class IntakeReport:
             f"  duplicate, skipped   {self.supplements_duplicate}",
             f"rack+NETT pairs merged {self.rack_net_merged}",
             f"unresolved conflicts   {len(self.conflicts)}",
+            f"day-of-week variants   {len(self.label_variants)} (kept the higher)",
             f"currencies             {dict(self.currencies)}",
             f"committed              {self.committed}",
         ]
@@ -204,7 +206,7 @@ class RateIntakeService:
         capacity: dict[tuple[str, str], int] = {}
         from_sleeps: set[tuple[str, str]] = set()
         for row in rows:
-            if N.key(row["row_type"]) != "RATE":
+            if N.row_kind(row) != "RATE":
                 continue
             room = N.clean(row["room_type"])
             if not room:
@@ -262,6 +264,7 @@ class RateIntakeService:
                     record["residence"],
                     record["occupancy"],
                     record["starts"],
+                    record["currency"],
                 )
             ].append(record)
 
@@ -304,6 +307,31 @@ class RateIntakeService:
                     report.rack_net_merged += 1
                     continue
 
+            # A distinction the sheet draws in prose that the schema has no
+            # column for — a weeknight rate beside a weekend one, priced the
+            # same way, on the same room-night. One Stop Nanyuki charges 10,000
+            # Sunday to Thursday and 13,500 on Friday and Saturday.
+            #
+            # Dropping these makes the property unquotable. Keeping the first
+            # depends on spreadsheet row order, and at One Stop that is the
+            # cheaper figure, so every weekend stay would under-charge by 35%
+            # with nothing to show it happened. Keeping the *highest* over-quotes
+            # a weeknight visibly, where the agent can see the figure and correct
+            # it against the sheet — the same reasoning as capacity inference.
+            labels = {m["label"] for m in members}
+            if len(by_kind) == 1 and len(labels) == len(members):
+                kept = max(members, key=lambda m: m["amount"])
+                spread = ", ".join(
+                    f"{m['amount']} ({m['label']})"
+                    for m in sorted(members, key=lambda m: m["amount"])
+                )
+                report.label_variants.append(
+                    f"{key[0]} / {key[1]} / {key[2]} / occ{key[4]} / from {key[5]}: "
+                    f"{spread} — kept {kept['amount']} {kept['currency']}"
+                )
+                out.append(kept)
+                continue
+
             amounts = ", ".join(
                 f"{m['amount']} {m['currency']} ({m['rate_kind']}, row {m['line']})"
                 for m in sorted(members, key=lambda m: m["line"])
@@ -343,7 +371,7 @@ class RateIntakeService:
                     Problem(_line, field_name, message, N.clean(_row["property_name"]))
                 )
 
-            kind = N.key(row["row_type"]) or "RATE"
+            kind = N.row_kind(row)
             if kind not in N.ROW_TYPES:
                 fail("row_type", f"{row['row_type']!r} is not RATE, SUPPLEMENT or EXTRA")
 
@@ -516,12 +544,18 @@ class RateIntakeService:
                 )
 
             natural = (
-                room_id, plan_id, residence_id, record["occupancy"], record["starts"]
+                room_id,
+                plan_id,
+                residence_id,
+                record["occupancy"],
+                record["starts"],
+                record["currency"],
             )
             if natural in seen:
                 report.warnings.append(
                     f"row {record['line']}: still collides on room, plan, residence, "
-                    "occupancy and start date after pair-merging; kept the first"
+                    "occupancy, start date and currency after pair-merging; "
+                    "kept the first"
                 )
                 continue
             seen.add(natural)
@@ -672,6 +706,7 @@ class RateIntakeService:
                 row.residence_category_id,
                 row.occupancy,
                 row.effective_from,
+                row.currency,
             ): row
             for row in rows
         }

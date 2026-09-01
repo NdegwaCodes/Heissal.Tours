@@ -76,8 +76,24 @@ valid Python escape sequence in it is interpreted before the code runs.
 `\d` survives (it is not a valid Python escape, so it passes through) which makes this
 worse: the pattern *looks* fine and half of it works.
 
+### The `\n`-in-a-replacement-string variant — three occurrences, all in `cli.py`
+
+The worst case is a heredoc script that *edits another file*, because the escape is
+resolved one level too few. Writing `"\\n"` inside the heredoc's replacement string
+yields a literal newline in the target `.py`, breaking a string literal:
+
+```python
+print(f"\n-- HEADER")     # what you want in cli.py
+b = 'print(f"\\n-- HEADER")'   # inside a heredoc -> writes a real newline. Broken.
+```
+
+It fails as a `SyntaxError: unterminated string literal`, so it is at least loud —
+but it has cost three round trips. **Use the Edit tool for any replacement string
+containing a newline escape.** Do not try to get the escaping level right.
+
 Rules:
 
+0. **Never use a heredoc'd script to insert code containing `\n`.** Use Edit.
 1. **Write files with the Write tool**, not a heredoc, whenever the content contains
    backslashes, quotes, apostrophes or non-ASCII text.
 2. If a heredoc is unavoidable, prefer escapes that have no Python meaning: use

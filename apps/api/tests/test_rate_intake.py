@@ -591,3 +591,119 @@ async def test_the_sheet_can_be_an_xlsx(db, tmp_path):
         )
     ).scalar_one()
     assert residence.key == "non_resident"
+
+
+# --------------------------------------------------------------------------- #
+# Shapes found in the client's second (audited) workbook, 2026-09-02
+# --------------------------------------------------------------------------- #
+
+
+def test_a_blank_row_type_means_rate():
+    """All 64 Temple Point rows in the audited workbook arrived with an empty
+    first column. A row carrying a room, a plan and an amount is a rate, and the
+    two passes over a sheet have to agree about that — one defaulted and the
+    other did not, so a property's rates imported while its room capacities were
+    inferred from an empty set."""
+    assert N.row_kind({"row_type": ""}) == "RATE"
+    assert N.row_kind({"row_type": "  "}) == "RATE"
+    assert N.row_kind({"row_type": "supplement"}) == "SUPPLEMENT"
+    assert N.row_kind({"row_type": "Extra"}) == "EXTRA"
+
+
+async def test_a_blank_row_type_still_feeds_capacity_inference(db, tmp_path):
+    """The regression the shared helper exists to prevent: with the row skipped
+    by the capacity pass, a four-sleeper villa fell back to the default two and
+    booked twice the rooms it needed."""
+    name = unique("Blank Type Villas")
+    path = sheet(
+        tmp_path,
+        f",{name},Testland,Villa,,FB,citizen,4,Standard,01/07/2026,31/10/2026,"
+        "KES,40000,room_per_night,sto,,inclusive,,,,",
+    )
+    report = await _import(db, path)
+    assert report.rates_created == 1
+    room = (
+        await db.execute(
+            select(RoomType)
+            .join(Accommodation, RoomType.accommodation_id == Accommodation.id)
+            .where(Accommodation.name == name)
+        )
+    ).scalar_one()
+    assert room.max_occupancy == 4
+    assert f"{name} / Villa" in report.derived_capacity
+
+
+async def test_one_room_night_in_three_currencies_is_three_rates(db, tmp_path):
+    """Kobe Suite Resort publishes every night in KES, USD and EUR and expects
+    the agent to bill in whichever the client is invoiced in — 30 groups, 90
+    rows. Under the old key those were a collision, and which currency survived
+    depended on spreadsheet row order; the survivor could be the EUR figure,
+    for which there is no exchange rate on file."""
+    name = unique("Tri Currency Suites")
+    row = (
+        f"RATE,{name},Testland,Suite,2,BB,non_resident,2,Standard,01/07/2026,"
+        "31/10/2026,{ccy},{amount},room_per_night,sto,,inclusive,,,,"
+    )
+    path = sheet(
+        tmp_path,
+        row.format(ccy="KES", amount=28105),
+        row.format(ccy="USD", amount=281),
+        row.format(ccy="EUR", amount=256),
+    )
+    report = await _import(db, path)
+    assert report.rates_created == 3
+    assert report.conflicts == []
+    stored = {r.currency: r.rate_per_night for r in await _rates(db, name)}
+    assert stored == {"KES": D("28105"), "USD": D("281"), "EUR": D("256")}
+
+
+async def test_a_day_of_week_pair_keeps_the_higher_figure_and_says_so(db, tmp_path):
+    """One Stop Nanyuki charges 10,000 Sunday-Thursday and 13,500 on Friday and
+    Saturday for the same hut. The schema has no weekday column, so the
+    distinction cannot be honoured.
+
+    Dropping the rows makes the property unquotable. Keeping the first depends
+    on row order, and at One Stop that is the cheaper figure, so every weekend
+    stay would under-charge by 35% with nothing to show it. Keeping the higher
+    over-quotes a weeknight *visibly*, where the agent can catch it against the
+    sheet — the same direction of error as capacity inference.
+    """
+    name = unique("Weekday Huts")
+    row = (
+        f"RATE,{name},Testland,Hut,2,RO,non_resident,1,{{label}},05/01/2026,"
+        "04/01/2027,KES,{amount},room_per_night,rack,,inclusive,,,,"
+    )
+    path = sheet(
+        tmp_path,
+        row.format(label="Weeknights (Sunday-Thursday)", amount=10000),
+        row.format(label="Weekends (Friday & Saturday)", amount=13500),
+    )
+    report = await _import(db, path)
+    assert report.rates_created == 1
+    assert report.conflicts == []
+    assert len(report.label_variants) == 1
+    note = report.label_variants[0]
+    assert "10000" in note and "13500" in note and "kept 13500" in note
+    assert (await _rates(db, name))[0].rate_per_night == D("13500")
+
+
+async def test_two_rates_under_one_label_stay_a_conflict(db, tmp_path):
+    """The escape hatch above must not swallow a genuine ambiguity. The One
+    Watamu Bay prices one room-night at 13,500 per person *and* 27,000 per room
+    for a single guest, under the identical label — a factor of two with nothing
+    to choose between them. Two rows sharing a label are not a day-of-week pair.
+    """
+    name = unique("Ambiguous Bay")
+    row = (
+        f"RATE,{name},Testland,Ocean Front,2,HB,non_resident,1,10 Jul - 25 Oct,"
+        "10/07/2026,25/10/2026,KES,{amount},{basis},sto,,inclusive,,,,"
+    )
+    path = sheet(
+        tmp_path,
+        row.format(amount=13500, basis="person_per_night"),
+        row.format(amount=27000, basis="room_per_night"),
+    )
+    report = await _import(db, path)
+    assert report.rates_created == 0
+    assert report.label_variants == []
+    assert len(report.conflicts) == 1

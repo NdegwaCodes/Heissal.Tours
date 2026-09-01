@@ -96,6 +96,10 @@ class AccommodationRate(UUIDPKMixin, TimestampMixin, Base):
             "residence_category_id",
             "occupancy",
             "effective_from",
+            # A rate card may publish one room-night in several currencies and
+            # let the agent bill in whichever the client is invoiced in. Those
+            # rows are one price quoted three ways, not a collision.
+            "currency",
             name="uq_accommodation_rate_period",
         ),
     )

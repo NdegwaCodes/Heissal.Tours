@@ -112,8 +112,28 @@ backend-only and the client sees per-person and group totals only.
     actionable
   - Filled-in workbooks are gitignored: the blank template is tracked, typed supplier rates
     never enter git history
-  - **Open with the client:** 200 rows need dates or occupancy filling in; `EUR` appears on 30
-    rows with no EUR→KES rate on file. **`Mombasa/Nyali` is not a misspelling** — the
+  - **Second workbook, audited by the client (2026-09-02, 3,190 rows).** Re-imported: **3,044
+    accepted, 2,276 rates, 32 properties, 655 pairs merged, 2 conflicts, 146 rejected.** The
+    client's own fix pass closed 699 of the 1,002 rack rows with no stated operator discount and
+    filled every blank room type and supplement label. Three findings needed code:
+    - **Blank `row_type`** on all 64 Temple Point rows. The write pass defaulted it to `RATE`,
+      the capacity pass did not, so a property's rates imported while its room capacities were
+      inferred from an empty set. `N.row_kind()` now decides it in one place
+    - **One room-night published in three currencies** (Kobe Suite: KES/USD/EUR — 30 groups, 90
+      rows) was a collision under the old key, resolved by spreadsheet row order, and the
+      survivor could be the EUR figure with no rate on file. `currency` is now part of the rate
+      uniqueness key (migration `8c1d2a9b4e37`), which also lets the engine prefer the
+      presentation currency and skip an FX conversion. Conflicts fell 41 → 2
+    - **Day-of-week pricing** (One Stop Nanyuki, Soames — 9 groups) is a distinction the schema
+      has no column for. Not a false positive: the higher figure is kept and reported, so a
+      weeknight over-quotes visibly rather than a weekend under-quoting 35% silently
+  - **Open with the client:** `vat` is blank on 1,335 rows (45% of the corpus) and the client's
+    audit says explicitly *not* to read blank as inclusive — which is what the importer does.
+    Needs a third state on the rate, surfaced at quote time, not a different silent default;
+    146 rows still need dates or occupancy; `EUR` appears on 30 rows with no EUR→KES rate on
+    file; Peaks Hotel Nanyuki is a 2025 card extended to end-2026 and nothing covers 2027;
+    24 of 36 properties price non-residents only and 25 of 36 publish a single meal plan.
+    **`Mombasa/Nyali` is not a misspelling** — the
     client confirmed (2026-09-01) it means the property serves *both* destinations, which
     `Accommodation.destination_id` (one non-nullable FK) cannot express; needs a
     property×destination join, with the itinerary leg deciding which destination's park and

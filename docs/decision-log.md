@@ -717,3 +717,45 @@ The blank template and its guide are tracked; anything an agent has typed suppli
 is confidential and must never enter git history — the same rule as the uploaded sheets. The
 importer is verified against a throwaway database (`tours_intake_test`) rather than the suite's
 `tours_test`, so 2,800 real rates cannot pollute the fixtures every test depends on.
+
+**Currency belongs in the accommodation rate uniqueness key** (Stage 3.12, 2026-09-02)
+A rate card may publish the *same* room-night in several currencies and expect the agent to
+bill in whichever the client is invoiced in. Kobe Suite Resort does this for every night:
+19,674 KES / 197 USD / 179 EUR for one Standard Garden View Suite — three rows that are one
+price quoted three ways, not three prices. The old key
+`(room_type, meal_plan, residence, occupancy, effective_from)` read them as a collision, so
+which currency survived depended on row order in a spreadsheet, and the survivor could be the
+EUR figure for which no exchange rate exists — leaving the property unpriceable while a usable
+USD figure sat in the sheet, discarded. Keeping all three also lets the pricing engine prefer
+the presentation currency and drop an FX conversion, and its rounding, out of the quote
+entirely. Migration `8c1d2a9b4e37`. This is what took the client's second workbook from 41
+unresolved conflicts to 2.
+
+**A distinction the schema cannot express keeps the higher figure, loudly** (Stage 3.12,
+2026-09-02)
+One Stop Nanyuki charges 10,000 Sunday–Thursday and 13,500 Friday–Saturday for the same hut;
+Soames does the same. The sheets draw the distinction in the `label` column, and there is no
+weekday mask on `accommodation_rates` to honour it. Three options, and none of them is
+"resolve it":
+
+- *Drop the rows* — the property becomes unquotable, which is a real loss for a correct sheet.
+- *Keep the first* — depends on spreadsheet row order. At One Stop that is the cheaper figure,
+  so every weekend stay under-charges by 35% with nothing to show it happened.
+- *Keep the higher, and report it* — a weeknight over-quotes visibly, where the agent can see
+  the figure and correct it against the sheet.
+
+The third, on the same reasoning as capacity inference: an error the agent can see beats one
+they cannot. Reported under its own heading rather than folded into `warnings`, because it is
+a schema gap to close, not a data problem to fix. Two rows sharing a label are *not* this case
+and stay conflicts — The One Watamu Bay prices one room-night at 13,500 per person and 27,000
+per room for a single guest, a factor of two with nothing to choose between them.
+
+**A blank `row_type` means `RATE`, decided in one place** (Stage 3.12, 2026-09-02)
+All 64 Temple Point rows in the client's audited workbook arrived with an empty first column —
+the common typo, since it is the one column that never varies. A row carrying a room, a meal
+plan and an amount is unambiguously a rate, so defaulting is safe. The bug was that the two
+passes over a sheet each decided this for themselves and *disagreed*: the write pass defaulted
+to `RATE`, the capacity pass tested `!= "RATE"` and skipped the row. A whole property's rates
+therefore imported while its room capacities were inferred from an empty set, falling back to
+two guests per room. `N.row_kind()` is the single place that decides, which is the general fix:
+a default that appears twice will eventually appear twice differently.

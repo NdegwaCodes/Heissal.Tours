@@ -74,6 +74,20 @@ async def run(path: str, *, commit: bool, limit: int) -> int:
             if len(report.conflicts) > limit:
                 print(f"   ... +{len(report.conflicts) - limit} more")
 
+        if report.label_variants:
+            print(
+                f"\n-- DAY-OF-WEEK / UNREPRESENTABLE VARIANTS "
+                f"({len(report.label_variants)}): the sheet prices one "
+                "room-night two ways\n   under different labels, and the schema "
+                "has no column for the distinction.\n   The HIGHER figure was "
+                "kept, so a weeknight over-quotes visibly rather than\n   a "
+                "weekend under-quoting silently. Check these."
+            )
+            for note in report.label_variants[:limit]:
+                print(f"   {note}")
+            if len(report.label_variants) > limit:
+                print(f"   ... +{len(report.label_variants) - limit} more")
+
         if report.derived_capacity:
             print(
                 f"\n-- room capacity INFERRED for {len(report.derived_capacity)} "
