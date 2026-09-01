@@ -113,7 +113,11 @@ backend-only and the client sees per-person and group totals only.
   - Filled-in workbooks are gitignored: the blank template is tracked, typed supplier rates
     never enter git history
   - **Open with the client:** 200 rows need dates or occupancy filling in; `EUR` appears on 30
-    rows with no EUR→KES rate on file; three destination spellings may be the same place
+    rows with no EUR→KES rate on file. **`Mombasa/Nyali` is not a misspelling** — the
+    client confirmed (2026-09-01) it means the property serves *both* destinations, which
+    `Accommodation.destination_id` (one non-nullable FK) cannot express; needs a
+    property×destination join, with the itinerary leg deciding which destination's park and
+    conservation fees apply. Scoped into 3.9 with legs
   - **Not yet loaded into the live catalogue** — awaiting the go-ahead
   - **Open with the client:** the KWS MICE group-discount ladder is ambiguous and is shipped
     switched off (see decision log); Mara conservancy fees are often already inside a lodge
