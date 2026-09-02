@@ -88,6 +88,21 @@ async def run(path: str, *, commit: bool, limit: int) -> int:
             if len(report.label_variants) > limit:
                 print(f"   ... +{len(report.label_variants) - limit} more")
 
+        if report.vat_unstated:
+            total = sum(report.vat_unstated.values())
+            print(
+                f"\n-- VAT POSITION UNSTATED on {total} rows across "
+                f"{len(report.vat_unstated)} properties.\n"
+                "   Read as VAT-inclusive, per the decision of 2026-09-02. These "
+                "sheets say\n   nothing either way, so if one is actually "
+                "exclusive its rates under-charge\n   by 16% and the quotation's "
+                "VAT line is untrue. Listed so it stays visible."
+            )
+            for name, count in report.vat_unstated.most_common(limit):
+                print(f"   {count:>5}  {name}")
+            if len(report.vat_unstated) > limit:
+                print(f"   ... +{len(report.vat_unstated) - limit} more")
+
         if report.derived_capacity:
             print(
                 f"\n-- room capacity INFERRED for {len(report.derived_capacity)} "

@@ -759,3 +759,16 @@ to `RATE`, the capacity pass tested `!= "RATE"` and skipped the row. A whole pro
 therefore imported while its room capacities were inferred from an empty set, falling back to
 two guests per room. `N.row_kind()` is the single place that decides, which is the general fix:
 a default that appears twice will eventually appear twice differently.
+
+**A blank VAT column is read as inclusive, and counted** (Stage 3.12, 2026-09-02)
+1,335 rows — 45% of the client's corpus, including all 720 Swahili Beach rows — state no VAT
+position at all, and the client's own audit re-read the sources and confirmed none is
+recoverable. Client decision: treat them as inclusive for now. That is the right call for
+Kenyan hotel sheets, which are inclusive by convention, and picking the opposite default only
+moves the error from under-charging 16% to over-charging it.
+
+What is *not* acceptable is that the assumption be invisible. `IntakeReport.vat_unstated`
+counts the rows per property and the importer prints them under their own heading on every
+run, so the size of the assumption is restated each time rather than being a default nobody
+remembers choosing. If a property later confirms it is exclusive, that report is the list of
+what to re-import.

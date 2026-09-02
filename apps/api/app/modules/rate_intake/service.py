@@ -81,6 +81,7 @@ class IntakeReport:
     rack_net_merged: int = 0
     conflicts: list[str] = field(default_factory=list)
     label_variants: list[str] = field(default_factory=list)
+    vat_unstated: Counter[str] = field(default_factory=Counter)
 
     derived_capacity: dict[str, int] = field(default_factory=dict)
     currencies: Counter[str] = field(default_factory=Counter)
@@ -115,6 +116,8 @@ class IntakeReport:
             f"rack+NETT pairs merged {self.rack_net_merged}",
             f"unresolved conflicts   {len(self.conflicts)}",
             f"day-of-week variants   {len(self.label_variants)} (kept the higher)",
+            f"VAT unstated           {sum(self.vat_unstated.values())} rows "
+            "(read as inclusive)",
             f"currencies             {dict(self.currencies)}",
             f"committed              {self.committed}",
         ]
@@ -401,6 +404,12 @@ class RateIntakeService:
             charged_per = N.clean(row["charged_per"]).lower()
             vat_inclusive = N.key(row["vat"]) != "EXCLUSIVE"
             vat_pct = DEFAULT_VAT_PCT
+            if N.key(row["vat"]) not in {"INCLUSIVE", "EXCLUSIVE"}:
+                # Read as inclusive, per the client's decision of 2026-09-02, but
+                # counted. 45% of the corpus states no VAT position at all, and a
+                # 16% assumption on 1,335 rows should not be invisible just
+                # because it is the agreed one.
+                report.vat_unstated[property_name] += 1
 
             record: dict[str, Any] = {
                 "line": line,
