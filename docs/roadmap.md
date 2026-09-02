@@ -96,8 +96,16 @@ backend-only and the client sees per-person and group totals only.
     reserves, sanctuaries and marine parks, plus the Maasai Mara's two seasons. Added the
     missing `african_citizen` residence category and corrected `resident`; made the seeder able
     to **correct** a wrong row rather than skip it forever
-  - ☐ **Remaining:** the cohort schema, wiring `OptionPricingService` onto the vector, and
-    bringing park fees, mandatory activities and child rates into a price for the first time
+  - ☑ **The cohort schema** (`quote_cohorts`, migration `b41f7ce90d28`, 12 tests) — a row per
+    (residency, traveller type). `app/modules/quotes/group.py` is now the **only** place that
+    answers "who is travelling on this quote?": three answers were possible before —
+    `pax_count`, `len(travellers)` and the quote's own category — and they could disagree, which
+    is how a group gets rooms for twenty-five and park fees for one. Precedence is cohorts, then
+    `pax_count`, then `travellers`; a `pax_count` that contradicts the cohorts is **refused**
+    rather than resolved, because two headcounts that disagree is a data-entry error
+  - ☐ **Remaining:** wiring `OptionPricingService` onto the vector (rooming and the rate lookup
+    per residency, `price_group` in place of a single flat `build_up`), and bringing park fees,
+    mandatory activities and child rates into a price for the first time
 - ☑ 3.12 Rate importer (`app/modules/rate_intake/`, 50 tests) — reads a filled-in intake sheet
   from .xlsx or .csv, normalises it, and writes destinations, properties, room types, rates and
   supplements with a two-pass dry-run/commit split. Verified against the client's real 3,161-row
