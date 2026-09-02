@@ -87,7 +87,7 @@ right plan, not a fallback); packages are **curated, not enumerated** — 3 legs
 transport modes is 192 combinations and a matrix of those is meaningless; the build-up stays
 backend-only and the client sees per-person and group totals only.
 
-- ◑ 3.8 Cohorts, currencies and the cost-basis vector
+- ☑ 3.8 Cohorts, currencies and the cost-basis vector (mandatory activities and child rates carried into 3.9)
   - ☑ **Pure layer** (`app/modules/quotes/cohorts.py`, no DB, sub-second): the group as
     cohorts, eight cost bases resolved against it, per-residency rooming, per-cohort build-up
     with per-person re-derived so every figure reconciles, shared costs split-then-converted
@@ -111,9 +111,12 @@ backend-only and the client sees per-person and group totals only.
     property publishes one room-night in several currencies (§3.12) the presentation currency
     wins over the later season, keeping FX out of the client's figure
   - ☑ **Park fees in an option's price** — see the closed gap note below
-  - ☐ **Remaining:** `price_group` in place of the single flat `build_up`, so each cohort gets
-    its own per-person figure in its own currency rather than the group being quoted as a total
-    whenever it is not uniform; mandatory activities and child *accommodation* rates
+  - ☑ **A per-person price per cohort** — residents in KES, non-residents in USD, children apart
+    from adults, plus a group total with the exchange rate used disclosed beside it. Every
+    cohort's `per_person × headcount = total` is asserted, not assumed. The whole-group
+    `build_up` stays as the internal worksheet in the presentation currency; the cohort rows sit
+    beside it rather than replacing it (see decision log for why)
+  - ☐ **Remaining:** mandatory activities and child *accommodation* rates on the vector
 - ☑ 3.12 Rate importer (`app/modules/rate_intake/`, 50 tests) — reads a filled-in intake sheet
   from .xlsx or .csv, normalises it, and writes destinations, properties, room types, rates and
   supplements with a two-pass dry-run/commit split. Verified against the client's real 3,161-row
