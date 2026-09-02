@@ -40,6 +40,7 @@ from app.modules.accommodations.models import (
     RoomType,
 )
 from app.modules.currency.fx import AdminExchangeRateProvider
+from app.modules.park_fees.models import ParkFee
 from app.modules.pricing.service import PricingConfigService
 from app.modules.quotes.cohorts import Group
 from app.modules.quotes.group import build_group, residence_ids
@@ -119,6 +120,12 @@ class OptionCosting:
     build_up: BuildUp
     is_comparable: bool
     warnings: list[str] = field(default_factory=list)
+
+
+# The one fee type an accommodation option implies. Conservancy, camping and the
+# rest attach to an activity or a leg rather than to a bed, so they are not
+# charged here — see the 3.9 packages work.
+PARK_ENTRY = "park_entry"
 
 
 def _supersedes(
@@ -384,6 +391,12 @@ class OptionPricingService:
             components["supplements"] = sum((s.cost for s in supplements), Decimal(0))
 
         warnings = list(best.warnings)
+        park_total, park_warnings = await self._park_fees(
+            quote, accommodation, nights=nights, group=group
+        )
+        if park_total:
+            components["park_fees"] = park_total
+        warnings.extend(park_warnings)
         if needs_chef(plan_code):
             meals = meals_needing_chef(plan_code, len(nights))
             chef = (option.chef_fee_per_meal or Decimal(0)) * meals
@@ -634,6 +647,105 @@ class OptionPricingService:
                 if current is None or _supersedes(rate, current, presentation):
                     slot[rate.occupancy] = rate
         return index
+
+    async def _park_fees(
+        self,
+        quote: Quote,
+        accommodation: Accommodation,
+        *,
+        nights: list[date],
+        group: Group,
+    ) -> tuple[Decimal, list[str]]:
+        """Park and conservation entry for this option's destination (§3.8).
+
+        The first time these reach an option's price. They were already on the
+        Stage 2.8 leg-based path (:class:`PricingEngine`), but the Stage 3
+        multi-option build-up — the one the client's document actually renders —
+        omitted them entirely. A three-night Maasai Mara option for twelve
+        non-residents was short by twelve times three times the daily fee, which
+        is not a rounding error.
+
+        Selected **per night**, like rates and for the same reason (§3.1): the
+        Mara publishes two seasons, so a stay crossing the boundary priced once
+        would be charged entirely at the cheaper one.
+
+        Charged per person per day, and the rate depends on the cohort's
+        traveller type — which is exactly what the vector carries, so no age has
+        to be guessed at.
+
+        The limit of that: a cohort is *counts*, so the agent's declared type is
+        taken at face value and the park's own child band is not applied. The
+        Mara exempts under-6s and charges 6–17, so a four-year-old entered as a
+        ``child`` is charged where the schedule would let them in free. It errs
+        toward over-charging, which is the visible direction, but it is not the
+        published rule; closing it needs ages on the quote. The age-based path
+        lives in :mod:`app.modules.park_fees.service`.
+
+        Returns ``(total_in_presentation_currency, warnings)``. A destination
+        with no fees at all is silent: most beach properties are not in a park.
+        A destination with fees for *some* residencies is a warning, because that
+        gap under-charges the residencies it is missing.
+        """
+        residences = await residence_ids(self.db, group.residences)
+        by_id = {value: name for name, value in residences.items()}
+        rows = list(
+            (
+                await self.db.execute(
+                    select(ParkFee).where(
+                        ParkFee.destination_id == accommodation.destination_id,
+                        ParkFee.fee_type == PARK_ENTRY,
+                        ParkFee.residence_category_id.in_(residences.values()),
+                        ParkFee.is_active.is_(True),
+                        ParkFee.effective_from <= nights[-1],
+                        ParkFee.effective_to >= nights[0],
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        if not rows:
+            return Decimal(0), []
+
+        index: dict[tuple[str, date], ParkFee] = {}
+        for fee in rows:
+            residence = by_id.get(fee.residence_category_id)
+            if residence is None:
+                continue
+            for night in nights:
+                if not (fee.effective_from <= night <= fee.effective_to):
+                    continue
+                current = index.get((residence, night))
+                if current is None or fee.effective_from > current.effective_from:
+                    index[(residence, night)] = fee
+
+        per_currency: dict[str, Decimal] = {}
+        uncovered: set[str] = set()
+        for cohort in group.cohorts:
+            for night in nights:
+                tonight = index.get((cohort.residence, night))
+                if tonight is None:
+                    uncovered.add(cohort.residence)
+                    continue
+                amount = {
+                    "adult": tonight.adult,
+                    "child": tonight.child,
+                    "infant": tonight.infant,
+                }.get(cohort.traveller_type, tonight.adult)
+                currency = tonight.currency.upper()
+                per_currency[currency] = per_currency.get(
+                    currency, Decimal(0)
+                ) + amount * cohort.count
+
+        warnings: list[str] = []
+        if uncovered:
+            warnings.append(
+                f"{accommodation.name}: this destination charges park fees but "
+                f"none is on file for {', '.join(sorted(uncovered))} across the "
+                f"whole stay, so those travellers are quoted without them. Load "
+                f"the missing schedule before issuing."
+            )
+        return await self._to_presentation(quote, per_currency), warnings
 
     async def _supplements(
         self,

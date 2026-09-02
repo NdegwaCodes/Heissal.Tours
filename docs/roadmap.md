@@ -103,9 +103,17 @@ backend-only and the client sees per-person and group totals only.
     is how a group gets rooms for twenty-five and park fees for one. Precedence is cohorts, then
     `pax_count`, then `travellers`; a `pax_count` that contradicts the cohorts is **refused**
     rather than resolved, because two headcounts that disagree is a data-entry error
-  - ☐ **Remaining:** wiring `OptionPricingService` onto the vector (rooming and the rate lookup
-    per residency, `price_group` in place of a single flat `build_up`), and bringing park fees,
-    mandatory activities and child rates into a price for the first time
+  - ☑ **Option pricing on the vector** — rates fetched for every residency on the quote, rooming
+    partitioned by residency, each half costed off its own sheet in its own currency. Three
+    citizens and three non-residents take four twins, not three, and a mixed group no longer
+    gets one per-person figure spanning two currencies. A meal plan must have a rate for
+    **every** residency, so available plans are intersected rather than unioned; and where a
+    property publishes one room-night in several currencies (§3.12) the presentation currency
+    wins over the later season, keeping FX out of the client's figure
+  - ☑ **Park fees in an option's price** — see the closed gap note below
+  - ☐ **Remaining:** `price_group` in place of the single flat `build_up`, so each cohort gets
+    its own per-person figure in its own currency rather than the group being quoted as a total
+    whenever it is not uniform; mandatory activities and child *accommodation* rates
 - ☑ 3.12 Rate importer (`app/modules/rate_intake/`, 50 tests) — reads a filled-in intake sheet
   from .xlsx or .csv, normalises it, and writes destinations, properties, room types, rates and
   supplements with a two-pass dry-run/commit split. Verified against the client's real 3,161-row
@@ -158,9 +166,20 @@ backend-only and the client sees per-person and group totals only.
 - ☐ 3.12 Internal costing worksheet (the mirror of the client document, every line with its
   basis, multiplier and source document) + the exclusions list (travel insurance and the rest)
 
-**Known gap carried in:** `compute_park_fee` has no callers anywhere — park fees are computed
-nowhere in the system, despite a docstring claiming the Stage 2.8 engine uses them. 3.8 closes
-this.
+**~~Known gap carried in:~~ closed 2026-09-02.** The gap was recorded as "`compute_park_fee`
+has no callers — park fees are computed nowhere", and the half of that which was wrong matters:
+they *were* computed on the leg-based `PricingEngine` path, but not in the Stage 3 multi-option
+build-up, which is the one the document renders. Every safari option was quoted with the beds
+and none of the entry, and no test caught it because every demo property sits in Diani, where
+nothing charges one. `OptionPricingService._park_fees` now charges them per person per day,
+selected per night so a stay crossing the Mara's season boundary is not priced entirely at the
+cheaper one (6 tests, `tests/test_option_park_fees.py`).
+
+`compute_park_fee` is kept as the **age-based** path — each park sets its own child band, so
+classification is re-decided against each fee — and the false docstring is corrected. The
+residual gap, documented rather than hidden: **a cohort labelled `child` is charged the child
+fee even where the park would exempt that age**, because a cohort carries counts and not ages.
+It over-charges rather than under-charges, so it is visible, but it is not the published rule.
 
 Key rules (detail in the design doc): rates are stored **VAT-inclusive** (16%; exclusive
 sources normalised ×1.16) so the engine adds no tax on top; margin, contingency and

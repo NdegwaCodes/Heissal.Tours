@@ -1,8 +1,23 @@
 """Park-fee selection and computation.
 
-Pure functions (`classify_age`, `compute_park_fee`) are unit-testable without a
-database and are reused by the pricing engine (Stage 2.8). The class method
-`select_fee` does the deterministic DB lookup.
+`select_fee` does the deterministic DB lookup. The pure functions are
+unit-testable without a database, and there are **two** ways a group's fees get
+worked out, which is deliberate rather than duplication:
+
+* `classify_age` + `compute_park_fee` — the **age-based** path, for a quote with
+  named travellers whose ages are known. Each park sets its own child band (the
+  Maasai Mara exempts under-6s and charges 6–17; others use 3–11), so
+  classification cannot happen once for the quote: it has to be re-decided
+  against each fee. `PricingEngine.classify_group` is the same rule extended to
+  travellers whose age is absent but whose type is declared.
+* The **cohort** path in `OptionPricingService._park_fees`, for a group quoted as
+  counts (§3.8). There are no ages, so the agent's declared traveller type is
+  taken at face value.
+
+The gap between them is real and worth knowing: a cohort labelled ``child`` is
+charged the child fee even where the park would exempt that age. It errs toward
+over-charging, which is the visible direction, but it is not the published rule.
+Closing it needs ages on the quote, not a change here.
 """
 
 from __future__ import annotations

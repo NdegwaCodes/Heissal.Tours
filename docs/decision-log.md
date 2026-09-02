@@ -802,3 +802,30 @@ are named is 25 travelling, and nobody has said what the other 23 are — and ot
 win, because they carry the adult/child split as well as the total. Caught by an existing
 test, which is the argument for having asserted the mixed-group case as a number rather than
 as behaviour.
+
+**Park fees enter an option's price on the cohort path; the age-based path stays**
+(Stage 3.8, 2026-09-02)
+The gap recorded since Stage 2.8 was "`compute_park_fee` has no callers — park fees are
+computed nowhere". Half right, and the half that was wrong matters: they *were* computed on
+the leg-based `PricingEngine` path, but not in the Stage 3 multi-option build-up, which is
+the one the client's document renders. Every safari option was quoted with the beds and none
+of the entry. No test caught it because every property in the demo catalogue sits in Diani,
+where nothing charges one.
+
+`OptionPricingService._park_fees` now charges them per person per day, **selected per night**
+for the same reason rates are (§3.1) — the Mara publishes two seasons, and one lookup for the
+stay would charge a boundary-crossing booking entirely at the cheaper one.
+
+`compute_park_fee` is kept, and is not redundant. It is the **age-based** path: each park
+sets its own child band (the Mara exempts under-6s and charges 6–17; others use 3–11), so
+classification has to be re-decided against each fee rather than once for the quote. The
+cohort path has no ages and takes the agent's declared traveller type at face value, which
+means **a cohort labelled `child` is charged the child fee even where the park would exempt
+that age**. It errs toward over-charging — the visible direction — but it is not the published
+rule, and closing it needs ages on the quote rather than a change to either function. The
+module docstring said the engine reused `compute_park_fee`; it never did, and that has been
+corrected rather than left as a comment nobody could trust.
+
+A destination charging *nobody* is silent, because most beach properties are not in a park. A
+destination charging *some* residencies and not others warns, because that gap silently
+under-charges the ones it is missing — the shape of a half-transcribed KWS table.
