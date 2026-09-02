@@ -381,10 +381,35 @@ class OptionPricingService:
                     )
                 )
             else:
-                into.warnings.append(
-                    f"{accommodation.name}: no room type could house {pax} guests "
-                    f"at the rates on file, so it could not be priced."
-                )
+                # A gap in the season windows and a gap in the occupancies both
+                # end with no priceable room type, and they need completely
+                # different fixes — one is a missing row in the sheet, the other
+                # is a property that cannot take the group. Saying "no room type
+                # could house 2 guests" when the truth is "nobody priced 31
+                # October" sends an agent hunting for the wrong thing. Swahili
+                # Beach's real sheet has exactly that hole: HIGH ends 30 Oct and
+                # SHOULDER starts 1 Nov.
+                uncovered = [
+                    night
+                    for night in nights
+                    if not any(
+                        night in per_night
+                        for (room, code, _res), per_night in rates.items()
+                        if code == plan_code
+                    )
+                ]
+                if uncovered:
+                    into.warnings.append(
+                        f"{accommodation.name}: no {plan_code} rate is loaded for "
+                        f"{', '.join(str(night) for night in uncovered)} — a gap "
+                        f"between season windows, not a capacity problem. The "
+                        f"property is priceable either side of it."
+                    )
+                else:
+                    into.warnings.append(
+                        f"{accommodation.name}: no room type could house {pax} "
+                        f"guests at the rates on file, so it could not be priced."
+                    )
             return
 
         supplements = await self._supplements(

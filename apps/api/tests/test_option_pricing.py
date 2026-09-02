@@ -1152,3 +1152,132 @@ async def test_the_rate_behind_a_converted_total_is_disclosed(
     option = _option(await _price(client, h, quote["id"]), "Coral Sands")
 
     assert option["conversions"].get("USD/KES") == "130.00000000"
+
+
+async def test_a_hole_between_seasons_says_so_rather_than_blaming_capacity(
+    client, admin_tokens, sample_catalogue
+):
+    """Two very different faults used to give the same message.
+
+    A gap in the season windows and a gap in the occupancies both end with no
+    priceable room type, but one is a missing row in the sheet and the other is
+    a property that cannot take the group. Found on the client's real corpus:
+    Swahili Beach's resident sheet runs HIGH to 30 Oct and SHOULDER from 1 Nov,
+    so **31 October has no rate at all**. A 29 Oct - 1 Nov stay dropped the
+    property with "no room type could house 2 guests", which is not true and
+    sends an agent hunting for the wrong thing.
+
+    Reproduced here with the same shape: two seasons either side of one
+    uncovered night.
+    """
+    import uuid as _uuid
+    from datetime import date as _date
+
+    from sqlalchemy import select as _select
+
+    from app.db.session import AsyncSessionLocal
+    from app.modules.accommodations.models import (
+        Accommodation,
+        AccommodationRate,
+        MealPlan,
+        RoomType,
+    )
+    from app.modules.destinations.models import Destination
+    from app.modules.quotes.models import Quote, QuoteOption
+    from app.modules.residence.models import ResidenceCategory
+
+    h, ids = _h(admin_tokens), sample_catalogue
+    tag = _uuid.uuid4().hex[:8]
+    async with AsyncSessionLocal() as db:
+        dest = (await db.execute(_select(Destination).limit(1))).scalar_one()
+        fb = (
+            await db.execute(_select(MealPlan).where(MealPlan.code == "FB"))
+        ).scalar_one()
+        rc = (
+            await db.execute(
+                _select(ResidenceCategory).where(ResidenceCategory.key == "citizen")
+            )
+        ).scalar_one()
+        acc = Accommodation(
+            name=f"Season Hole Lodge {tag}",
+            slug=f"season-hole-{tag}",
+            destination_id=dest.id,
+            category="lodge",
+        )
+        db.add(acc)
+        await db.flush()
+        room = RoomType(
+            accommodation_id=acc.id, name="Twin", code="TWN", max_occupancy=2
+        )
+        db.add(room)
+        await db.flush()
+        # HIGH ends 30 Oct, SHOULDER starts 1 Nov. 31 October is nobody's.
+        for starts, ends, amount in (
+            (_date(2026, 10, 1), _date(2026, 10, 30), "31200"),
+            (_date(2026, 11, 1), _date(2026, 12, 22), "29120"),
+        ):
+            for occupancy in (1, 2):
+                db.add(
+                    AccommodationRate(
+                        accommodation_id=acc.id,
+                        room_type_id=room.id,
+                        meal_plan_id=fb.id,
+                        residence_category_id=rc.id,
+                        season_name="s",
+                        occupancy=occupancy,
+                        effective_from=starts,
+                        effective_to=ends,
+                        currency="KES",
+                        rate_per_night=D(amount),
+                        rate_kind="sto",
+                    )
+                )
+        await db.commit()
+        acc_id = str(acc.id)
+
+    record = await _client_record(client, h, ids["residence_citizen"])
+    body = {
+        "client_id": record["id"],
+        "presentation_currency": "KES",
+        "residence_category_id": ids["residence_citizen"],
+        "arrival_date": "2026-10-29",
+        "departure_date": "2026-11-01",
+        "pax_count": 2,
+        "requested_meal_plan_id": ids["meal_plan_fb"],
+        "options": [{"accommodation_id": acc_id}],
+    }
+    quote = await client.post(f"{API}/quotes", headers=h, json=body)
+    assert quote.status_code == 201, quote.text
+    result = await _price(client, h, quote.json()["id"])
+
+    assert result["options"] == []
+    joined = " ".join(result["warnings"])
+    assert "2026-10-31" in joined, joined
+    assert "gap between season windows" in joined, joined
+    assert "could house" not in joined, joined
+
+    # And the stay either side of the hole prices normally.
+    body |= {"arrival_date": "2026-10-29", "departure_date": "2026-10-31"}
+    ok = await client.post(f"{API}/quotes", headers=h, json=body)
+    priced = await _price(client, h, ok.json()["id"])
+    assert len(priced["options"]) == 1, priced
+
+    async with AsyncSessionLocal() as db:
+        for quote_id in {
+            q
+            for (q,) in (
+                await db.execute(
+                    _select(QuoteOption.quote_id).where(
+                        QuoteOption.accommodation_id == _uuid.UUID(acc_id)
+                    )
+                )
+            ).all()
+        }:
+            row = await db.get(Quote, quote_id)
+            if row is not None:
+                await db.delete(row)
+        await db.flush()
+        acc_row = await db.get(Accommodation, _uuid.UUID(acc_id))
+        if acc_row is not None:
+            await db.delete(acc_row)
+        await db.commit()
