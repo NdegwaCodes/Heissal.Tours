@@ -425,6 +425,22 @@ class SupplementChargeInternal(BaseModel):
     cost: Decimal
 
 
+class CohortPriceRead(BaseModel):
+    """What one cohort pays, in its own billing currency (§3.8).
+
+    Client-facing: these are prices, not costs. For a mixed group they are the
+    only meaningful per-person figures, since ``per_person`` below is NULL
+    whenever residency or traveller type varies.
+    """
+
+    residence: str
+    traveller_type: str
+    headcount: int
+    currency: str
+    per_person: Decimal
+    total: Decimal
+
+
 class QuoteOptionClientRead(BaseModel):
     """What the client is shown for one option: a price, and nothing behind it."""
 
@@ -440,6 +456,12 @@ class QuoteOptionClientRead(BaseModel):
     per_person: Decimal | None = None
     group_total: Decimal
     is_comparable: bool
+    # One row per cohort. Residents in KES beside non-residents in USD, adults
+    # apart from children — what the client asked to be able to show.
+    cohorts: list[CohortPriceRead] = Field(default_factory=list)
+    # The rates used to reach a group total spanning currencies. A converted
+    # total with an unstated rate is a dispute waiting to happen.
+    conversions: dict[str, Decimal] = Field(default_factory=dict)
 
 
 class QuoteOptionInternalRead(QuoteOptionClientRead):

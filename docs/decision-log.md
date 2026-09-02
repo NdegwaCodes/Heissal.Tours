@@ -829,3 +829,37 @@ corrected rather than left as a comment nobody could trust.
 A destination charging *nobody* is silent, because most beach properties are not in a park. A
 destination charging *some* residencies and not others warns, because that gap silently
 under-charges the ones it is missing — the shape of a half-transcribed KWS table.
+
+**Per-cohort prices sit beside the whole-group build-up, not instead of it**
+(Stage 3.8, 2026-09-02)
+The client's requirement — "per person basis for residents and a different one for non
+residents" — is now a row per cohort in that cohort's own billing currency, alongside a group
+total. Two things about the shape are deliberate.
+
+*The whole-group `build_up` is untouched.* It stays in the presentation currency and remains
+the internal worksheet: cost subtotal, contingency, cost basis, profit, agent cover fee. Those
+are all pre-rounding, so they reconcile with anything derived from them. Replacing them with a
+sum of per-cohort build-ups would have moved every existing hand-worked figure by a rounding
+step for no gain, and the cost side genuinely is one number for the booking.
+
+*Each cohort's per-person figure is rounded up first and multiplied back out.* Same rule as
+§3.6 and for the same reason: a client can check `per_person x headcount = total` on the page.
+Rounding a cohort total and dividing would reproduce the reference proposal's own
+contradiction, where page 6 quotes 28,800 per person against a 720,000 total implying 28,400.
+Asserted per cohort, not just for the group.
+
+What each line reaches is the design: **accommodation** names a residency and no traveller
+type, so it is shared within that residency (a resident adult and a resident child sleep in
+the same rooms off the same sheet); **park fees** name both, because a resident child pays the
+resident child rate and nobody else shares that line; **supplements, chef and food** name
+neither and split per head, since a chef costs the same whoever eats.
+
+**Exchange rates are pinned per option, not looked up inside the arithmetic**
+(Stage 3.8, 2026-09-02)
+`price_group` takes a plain synchronous callable, so the pure layer cannot do I/O. Rather than
+work around that, the service pre-fetches every pair the option needs and closes over the
+table. That is the stronger design regardless: every figure on one option converts at the same
+rate, where a lazy lookup would let a rate change between two cohorts of the same group and
+the totals would then not reconcile with the per-person figures they came from. A pair that is
+genuinely absent raises with both currencies named rather than defaulting to 1 — the failure
+mode a missing rate deserves, since a silent 1.0 would quote dollars as shillings.

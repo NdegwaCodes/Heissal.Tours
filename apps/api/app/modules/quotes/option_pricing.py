@@ -24,6 +24,7 @@ Three rules shape how it reads:
 from __future__ import annotations
 
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
@@ -42,7 +43,7 @@ from app.modules.accommodations.models import (
 from app.modules.currency.fx import AdminExchangeRateProvider
 from app.modules.park_fees.models import ParkFee
 from app.modules.pricing.service import PricingConfigService
-from app.modules.quotes.cohorts import Group
+from app.modules.quotes.cohorts import CostLine, Group, GroupPrice, price_group
 from app.modules.quotes.group import build_group, residence_ids
 from app.modules.quotes.models import Quote, QuoteOption, QuoteRejectedCandidate
 from app.modules.quotes.options import (
@@ -94,6 +95,11 @@ class RoomTypeQuote:
     # room, so a derived figure is never mistaken for a quoted one (§3.3).
     derived_occupancies: tuple[int, ...] = ()
     warnings: list[str] = field(default_factory=list)
+    # The same cost split by residency, in the currency each was quoted in —
+    # ``{residence: {currency: amount}}``. ``costed_total`` above is this summed
+    # and converted, which is what compares room types; this is what lets each
+    # residency be priced in its own currency (§3.8).
+    costed_by_residence: dict[str, dict[str, Decimal]] = field(default_factory=dict)
 
 
 @dataclass
@@ -120,6 +126,11 @@ class OptionCosting:
     build_up: BuildUp
     is_comparable: bool
     warnings: list[str] = field(default_factory=list)
+    # What each cohort pays, in its own billing currency (§3.8) — residents in
+    # shillings, non-residents in dollars, children apart from adults. The
+    # client's confirmed requirement, and the only figures that are meaningful
+    # for a mixed group, where ``build_up.per_person`` is necessarily NULL.
+    cohort_prices: GroupPrice | None = None
 
 
 # The one fee type an accommodation option implies. Conservancy, camping and the
@@ -391,7 +402,7 @@ class OptionPricingService:
             components["supplements"] = sum((s.cost for s in supplements), Decimal(0))
 
         warnings = list(best.warnings)
-        park_total, park_warnings = await self._park_fees(
+        park_total, park_warnings, park_lines = await self._park_fees(
             quote, accommodation, nights=nights, group=group
         )
         if park_total:
@@ -430,6 +441,19 @@ class OptionPricingService:
             # group got one per-person figure covering two currencies.
             uniform_group=group.is_uniform,
         )
+        cohort_prices = await self._per_cohort(
+            quote,
+            best,
+            park_lines=park_lines,
+            shared=components,
+            capacity_of=best.room_type_id,
+            group=group,
+            nights=nights,
+            contingency_pct=contingency_pct,
+            profit_pct=profit_pct,
+            agent_cover_fee=option.agent_cover_fee,
+            rounding_step=rounding_step,
+        )
         into.options.append(
             OptionCosting(
                 accommodation_id=accommodation.id,
@@ -452,6 +476,7 @@ class OptionPricingService:
                 # with the others; an agent flag can only narrow that, not widen it.
                 is_comparable=option.is_comparable and not is_fallback,
                 warnings=warnings,
+                cohort_prices=cohort_prices,
             )
         )
 
@@ -486,6 +511,7 @@ class OptionPricingService:
         plan: list[int] = []
         paid: dict[str, Decimal] = {}
         costed: dict[str, Decimal] = {}
+        by_residence: dict[str, dict[str, Decimal]] = {}
         derived: set[int] = set()
         per_person_basis: set[str] = set()
         for residence, rooms in rooming.items():
@@ -518,9 +544,12 @@ class OptionPricingService:
                     paid[currency] = paid.get(currency, Decimal(0)) + supplier_paid(
                         amount, rate.supplier_discount_pct
                     )
-                    costed[currency] = costed.get(currency, Decimal(0)) + costed_rate(
+                    charge = costed_rate(
                         amount, rate.supplier_discount_pct, rate.rate_kind
                     )
+                    costed[currency] = costed.get(currency, Decimal(0)) + charge
+                    mine = by_residence.setdefault(residence, {})
+                    mine[currency] = mine.get(currency, Decimal(0)) + charge
 
         warnings: list[str] = []
         if derived:
@@ -558,6 +587,7 @@ class OptionPricingService:
                 retained_discount=costed_total - paid_total,
                 derived_occupancies=tuple(sorted(derived)),
                 warnings=warnings,
+                costed_by_residence=by_residence,
             ),
             None,
         )
@@ -648,6 +678,138 @@ class OptionPricingService:
                     slot[rate.occupancy] = rate
         return index
 
+    async def _per_cohort(
+        self,
+        quote: Quote,
+        best: RoomTypeQuote,
+        *,
+        park_lines: list[CostLine],
+        shared: dict[str, Decimal],
+        capacity_of: uuid.UUID,
+        group: Group,
+        nights: list[date],
+        contingency_pct: Decimal,
+        profit_pct: Decimal,
+        agent_cover_fee: Decimal,
+        rounding_step: Decimal,
+    ) -> GroupPrice | None:
+        """What each cohort pays, in its own billing currency (§3.8).
+
+        The client's requirement in one figure per cohort: residents quoted in
+        shillings, non-residents in dollars, children apart from adults, and a
+        group total for the whole booking.
+
+        Three shapes of cost line, and which cohorts each reaches is the whole
+        design:
+
+        * **Accommodation** names a residency and no traveller type, so it is
+          shared within that residency — a resident adult and a resident child
+          sleep in the same rooms off the same sheet.
+        * **Park fees** name a residency *and* a type, because a resident child
+          pays the resident child rate and nobody else shares that line.
+        * **Supplements, chef and food** name neither, so they split per head
+          across the whole group. A chef costs the same whoever eats.
+
+        Those already arrive converted to the presentation currency, which is
+        why the converter matters: a shared cost is one amount that has to land
+        in two currencies, and :func:`~app.modules.quotes.cohorts.attribute`
+        splits it *before* converting so no cohort's share carries its own
+        rounding of the exchange rate.
+        """
+        room_type = await self.db.get(RoomType, capacity_of)
+        if room_type is None:
+            return None
+        presentation = quote.presentation_currency.upper()
+
+        lines: list[CostLine] = [
+            CostLine(
+                label="accommodation",
+                amount=amount,
+                currency=currency,
+                basis="per_group",
+                residence=residence,
+            )
+            for residence, buckets in best.costed_by_residence.items()
+            for currency, amount in buckets.items()
+        ]
+        lines.extend(park_lines)
+        # Everything the whole group shares. Already in the presentation
+        # currency, since that is how the components dict is built.
+        for label, amount in shared.items():
+            if label in {"accommodation", "park_fees"} or amount == 0:
+                continue
+            lines.append(
+                CostLine(
+                    label=label,
+                    amount=amount,
+                    currency=presentation,
+                    basis="per_group",
+                )
+            )
+
+        convert, rate_used = await self._converter(
+            {line.currency for line in lines}
+            | {cohort.currency for cohort in group.cohorts}
+            | {presentation},
+            on_date=nights[0],
+        )
+        return price_group(
+            lines=lines,
+            group=group,
+            capacity=room_type.max_occupancy,
+            contingency_pct=contingency_pct,
+            profit_pct=profit_pct,
+            agent_cover_fee=agent_cover_fee,
+            rounding_step=rounding_step,
+            group_currency=presentation,
+            convert=convert,
+            rate_used=rate_used,
+        )
+
+    async def _converter(
+        self, currencies: set[str], *, on_date: date
+    ) -> tuple[
+        Callable[[Decimal, str, str], Decimal], Callable[[str, str], Decimal]
+    ]:
+        """A *synchronous* converter over a pre-fetched rate table.
+
+        The pure layer takes a plain callable on purpose — it must not do I/O,
+        and pinning the rates here means every figure on one option is converted
+        at the same rate as every other. Resolving them lazily inside the
+        arithmetic would let a rate change mid-quote, and the totals would then
+        not reconcile with the per-person figures they were derived from.
+        """
+        rates: dict[tuple[str, str], Decimal] = {}
+        for base in currencies:
+            for quote_ccy in currencies:
+                if base == quote_ccy:
+                    rates[(base, quote_ccy)] = Decimal(1)
+                    continue
+                try:
+                    rates[(base, quote_ccy)] = await self.fx.effective_rate(
+                        base, quote_ccy, on_date
+                    )
+                except (AppError, NotFoundError):
+                    # Missing pairs are left out. If a line actually needs one,
+                    # the lookup below raises with both currencies named, which
+                    # is a better error than a rate silently defaulting to 1.
+                    continue
+
+        def rate_for(base: str, quote_ccy: str) -> Decimal:
+            try:
+                return rates[(base.upper(), quote_ccy.upper())]
+            except KeyError:
+                raise AppError(
+                    f"No exchange rate on file for {base.upper()} to "
+                    f"{quote_ccy.upper()} on {on_date}, so this option cannot "
+                    "be priced per cohort."
+                ) from None
+
+        def convert(amount: Decimal, base: str, quote_ccy: str) -> Decimal:
+            return amount * rate_for(base, quote_ccy)
+
+        return convert, rate_for
+
     async def _park_fees(
         self,
         quote: Quote,
@@ -655,7 +817,7 @@ class OptionPricingService:
         *,
         nights: list[date],
         group: Group,
-    ) -> tuple[Decimal, list[str]]:
+    ) -> tuple[Decimal, list[str], list[CostLine]]:
         """Park and conservation entry for this option's destination (§3.8).
 
         The first time these reach an option's price. They were already on the
@@ -705,7 +867,7 @@ class OptionPricingService:
             .all()
         )
         if not rows:
-            return Decimal(0), []
+            return Decimal(0), [], []
 
         index: dict[tuple[str, date], ParkFee] = {}
         for fee in rows:
@@ -719,6 +881,10 @@ class OptionPricingService:
                 if current is None or fee.effective_from > current.effective_from:
                     index[(residence, night)] = fee
 
+        # Accumulated per cohort as well as per currency, because a fee belongs
+        # to the exact cohort that owes it: a resident child pays the resident
+        # child rate, and nothing else in the group shares that line.
+        per_cohort: dict[tuple[str, str, str], Decimal] = {}
         per_currency: dict[str, Decimal] = {}
         uncovered: set[str] = set()
         for cohort in group.cohorts:
@@ -733,9 +899,22 @@ class OptionPricingService:
                     "infant": tonight.infant,
                 }.get(cohort.traveller_type, tonight.adult)
                 currency = tonight.currency.upper()
-                per_currency[currency] = per_currency.get(
-                    currency, Decimal(0)
-                ) + amount * cohort.count
+                charge = amount * cohort.count
+                per_currency[currency] = per_currency.get(currency, Decimal(0)) + charge
+                slot = (cohort.residence, cohort.traveller_type, currency)
+                per_cohort[slot] = per_cohort.get(slot, Decimal(0)) + charge
+
+        lines = [
+            CostLine(
+                label="park_fees",
+                amount=charge,
+                currency=currency,
+                basis="per_group",
+                residence=residence,
+                traveller_type=traveller_type,
+            )
+            for (residence, traveller_type, currency), charge in per_cohort.items()
+        ]
 
         warnings: list[str] = []
         if uncovered:
@@ -745,7 +924,7 @@ class OptionPricingService:
                 f"whole stay, so those travellers are quoted without them. Load "
                 f"the missing schedule before issuing."
             )
-        return await self._to_presentation(quote, per_currency), warnings
+        return await self._to_presentation(quote, per_currency), warnings, lines
 
     async def _supplements(
         self,

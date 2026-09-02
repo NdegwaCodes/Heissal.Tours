@@ -1009,3 +1009,146 @@ async def test_a_headcount_beside_a_few_named_guests_still_wins(
     )
     option = _option(await _price(client, h, quote["id"]), "Coral Sands")
     assert option["rooms_required"] == 13
+
+
+# --------------------------------------------------------------------------- #
+# Stage 3.8 — per-cohort prices, each in its own billing currency
+# --------------------------------------------------------------------------- #
+
+
+def _by_cohort(option):
+    return {
+        (c["residence"], c["traveller_type"]): c for c in option["cohorts"]
+    }
+
+
+async def test_residents_and_non_residents_get_their_own_per_person_figure(
+    client, admin_tokens, sample_catalogue
+):
+    """The client's requirement, in one response.
+
+    A mixed group has no single per-person price — ``per_person`` is NULL, and
+    correctly so, because one number cannot span two currencies. What replaces
+    it is a figure per cohort **in that cohort's own billing currency**:
+    residents in KES off the shilling sheet, non-residents in USD off the dollar
+    one.
+    """
+    h, ids = _h(admin_tokens), sample_catalogue
+    quote = await _cohort_quote(
+        client,
+        h,
+        ids,
+        cohorts=[("citizen", "adult", 3), ("non_resident", "adult", 3)],
+        accommodations=["acc_sto_full_board"],
+    )
+    option = _option(await _price(client, h, quote["id"]), "Coral Sands")
+
+    assert option["per_person"] is None
+    cohorts = _by_cohort(option)
+    assert set(cohorts) == {("citizen", "adult"), ("non_resident", "adult")}
+
+    resident = cohorts[("citizen", "adult")]
+    visitor = cohorts[("non_resident", "adult")]
+    assert resident["currency"] == "KES"
+    assert visitor["currency"] == "USD"
+    assert resident["headcount"] == 3
+    assert visitor["headcount"] == 3
+    assert D(resident["per_person"]) > 0
+    assert D(visitor["per_person"]) > 0
+
+
+async def test_every_cohort_total_is_its_per_person_times_its_headcount(
+    client, admin_tokens, sample_catalogue
+):
+    """The reconciliation rule the whole design exists for (§3.6).
+
+    Per person is rounded up **first** and multiplied back out, so a client can
+    check the arithmetic on the page. Rounding a total and dividing instead is
+    what makes the reference proposal contradict itself — page 6 quotes 28,800
+    per person against a 720,000 total that implies 28,400.
+    """
+    h, ids = _h(admin_tokens), sample_catalogue
+    quote = await _cohort_quote(
+        client,
+        h,
+        ids,
+        cohorts=[
+            ("citizen", "adult", 4),
+            ("citizen", "child", 2),
+            ("non_resident", "adult", 2),
+        ],
+        accommodations=["acc_sto_full_board"],
+    )
+    option = _option(await _price(client, h, quote["id"]), "Coral Sands")
+
+    assert len(option["cohorts"]) == 3
+    for cohort in option["cohorts"]:
+        assert D(cohort["total"]) == D(cohort["per_person"]) * cohort["headcount"], (
+            cohort
+        )
+
+
+async def test_a_child_cohort_is_priced_apart_from_the_adults(
+    client, admin_tokens, sample_catalogue
+):
+    """Same residency, same rooms, two cohorts — so the split is visible even
+    where no child *rate* applies. This is what makes an adult-plus-child group
+    quotable per person at all; before the vector it was a total and nothing
+    else."""
+    h, ids = _h(admin_tokens), sample_catalogue
+    quote = await _cohort_quote(
+        client,
+        h,
+        ids,
+        cohorts=[("citizen", "adult", 4), ("citizen", "child", 2)],
+        accommodations=["acc_sto_full_board"],
+    )
+    option = _option(await _price(client, h, quote["id"]), "Coral Sands")
+
+    cohorts = _by_cohort(option)
+    assert set(cohorts) == {("citizen", "adult"), ("citizen", "child")}
+    assert all(c["currency"] == "KES" for c in option["cohorts"])
+    # Six travellers, all accounted for.
+    assert sum(c["headcount"] for c in option["cohorts"]) == 6
+
+
+async def test_a_uniform_group_gets_one_cohort_matching_the_headline_figure(
+    client, admin_tokens, sample_catalogue
+):
+    """25 citizens is one cohort, and its per-person figure must be the same
+    number the option already quotes. Two ways of computing the same price that
+    disagree is worse than either one alone."""
+    h, ids = _h(admin_tokens), sample_catalogue
+    quote = await _cohort_quote(
+        client,
+        h,
+        ids,
+        cohorts=[("citizen", "adult", 25)],
+        accommodations=["acc_sto_full_board"],
+    )
+    option = _option(await _price(client, h, quote["id"]), "Coral Sands")
+
+    assert len(option["cohorts"]) == 1
+    only = option["cohorts"][0]
+    assert D(only["per_person"]) == D(option["per_person"])
+    assert D(only["total"]) == D(option["group_total"])
+    assert only["currency"] == option["currency"] == "KES"
+
+
+async def test_the_rate_behind_a_converted_total_is_disclosed(
+    client, admin_tokens, sample_catalogue
+):
+    """A group total spanning currencies is a conversion, and a converted total
+    with an unstated rate is a dispute waiting to happen. The rate used is
+    returned alongside it."""
+    h, ids = _h(admin_tokens), sample_catalogue
+    quote = await _cohort_quote(
+        client,
+        h,
+        ids,
+        cohorts=[("citizen", "adult", 2), ("non_resident", "adult", 2)],
+        accommodations=["acc_sto_full_board"],
+    )
+    option = _option(await _price(client, h, quote["id"]), "Coral Sands")
+
+    assert option["conversions"].get("USD/KES") == "130.00000000"

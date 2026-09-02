@@ -18,6 +18,7 @@ from app.modules.quotes.option_pricing import (
 from app.modules.quotes.pricing_service import QuotePricingService
 from app.modules.quotes.schemas import (
     CalculateRequest,
+    CohortPriceRead,
     OptionBuildUpInternal,
     OptionPricingClientResult,
     OptionPricingInternalResult,
@@ -178,6 +179,22 @@ def _client_option(costing: OptionCosting) -> QuoteOptionClientRead:
         per_person=costing.build_up.per_person,
         group_total=costing.build_up.group_total,
         is_comparable=costing.is_comparable,
+        cohorts=[
+            CohortPriceRead(
+                residence=price.cohort.residence,
+                traveller_type=price.cohort.traveller_type,
+                headcount=price.cohort.count,
+                currency=price.currency,
+                per_person=price.per_person,
+                total=price.total,
+            )
+            for price in (
+                costing.cohort_prices.cohorts if costing.cohort_prices else ()
+            )
+        ],
+        conversions=(
+            dict(costing.cohort_prices.conversions) if costing.cohort_prices else {}
+        ),
     )
 
 
