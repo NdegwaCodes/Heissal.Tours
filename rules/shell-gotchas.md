@@ -107,3 +107,32 @@ Rules:
    python -c "import m; print(m._RE.pattern.encode())"
    ```
    `cat -v` renders control characters; a plain `grep` or an editor will not show them.
+
+## `pytest` on its own runs against the LIVE database
+
+`scripts/test_local.sh` exports `DATABASE_URL` from `.env.test` and refuses any name not
+ending in `_test`. Running `pytest` directly skips all of that and falls back to `.env`,
+which points at the **live Neon catalogue** (`HeissalTours`). The suite seeds, mutates and
+deletes rows.
+
+This was found on 2026-09-02 by running `pytest tests/test_documents.py` to chase one
+failure: 26 tests errored with `column accommodations.blurb does not exist`, because the
+live database was behind on a migration. That is the only reason nothing was written.
+
+`tests/conftest.py` now refuses it at **collection time**, before a fixture opens a
+connection:
+
+```
+RuntimeError: REFUSING to run tests against database 'HeissalTours' — the name does not
+end in '_test'.
+```
+
+Always `bash scripts/test_local.sh [args]`. It takes the same pytest arguments.
+
+Related trap: a *stale row* in the shared `tours_test` database can keep an out-of-date
+assertion passing indefinitely. `test_the_real_fonts_can_be_swapped_in_through_config`
+asserted `fonts_are_placeholders is True` for a week after 3.11 made the real faces the
+default, because its own `finally` block wrote the literal `True` back each run. It failed
+the first time the database was rebuilt from migrations. **Run `RESET_DB=1
+bash scripts/test_local.sh` before believing a green suite** after changing a config
+default or a seeded value.

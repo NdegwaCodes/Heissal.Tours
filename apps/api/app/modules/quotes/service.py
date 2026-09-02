@@ -22,6 +22,7 @@ from app.modules.quotes.models import (
     Quote,
     QuoteAccommodation,
     QuoteActivity,
+    QuoteCohort,
     QuoteCounter,
     QuoteLeg,
     QuoteOption,
@@ -115,6 +116,7 @@ class QuoteService:
             quote.travellers.append(
                 QuoteTraveller(traveller_type=t.traveller_type, age=t.age)
             )
+        await self._attach_cohorts(quote, payload.cohorts)
         for index, leg in enumerate(payload.legs, start=1):
             ql = QuoteLeg(
                 sequence=index,
@@ -179,6 +181,60 @@ class QuoteService:
             ) from exc
 
         return await self._load(quote.id)
+
+    async def _attach_cohorts(self, quote: Quote, rows: list) -> None:
+        """Validate and attach the group vector (§3.8).
+
+        Two checks the database cannot make. Every residence category has to
+        exist *and* have a billing currency, because a cohort with no currency
+        produces bare numbers rather than prices. And where ``pax_count`` is also
+        given it has to agree with the cohorts: the cohorts win either way, but
+        a quote whose two headcounts disagree is a data-entry error, not a
+        precedence question, and letting it through means someone later reads
+        the wrong one and cannot tell.
+        """
+        if not rows:
+            return
+
+        wanted = {row.residence_category_id for row in rows}
+        found = {
+            category.id: category
+            for category in (
+                await self.db.execute(
+                    select(ResidenceCategory).where(ResidenceCategory.id.in_(wanted))
+                )
+            )
+            .scalars()
+            .all()
+        }
+        if missing := wanted - set(found):
+            raise NotFoundError(
+                f"{len(missing)} cohort(s) name a residence category that does "
+                "not exist."
+            )
+        if blank := sorted(
+            found[id_].key for id_ in wanted if not found[id_].default_currency_code
+        ):
+            raise AppError(
+                "These residence categories have no default currency, so "
+                f"travellers in them cannot be priced: {', '.join(blank)}."
+            )
+
+        total = sum(row.headcount for row in rows)
+        if quote.pax_count is not None and quote.pax_count != total:
+            raise AppError(
+                f"pax_count is {quote.pax_count} but the cohorts add up to "
+                f"{total}. Send one or the other, or make them agree."
+            )
+
+        for row in rows:
+            quote.cohorts.append(
+                QuoteCohort(
+                    residence_category_id=row.residence_category_id,
+                    traveller_type=row.traveller_type,
+                    headcount=row.headcount,
+                )
+            )
 
     async def update_quote(self, quote_id: uuid.UUID, patch: dict) -> Quote:
         quote = await self.db.get(Quote, quote_id)

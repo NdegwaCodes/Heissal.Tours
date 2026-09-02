@@ -22,6 +22,7 @@ from typing import Any
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     Date,
     DateTime,
     ForeignKey,
@@ -188,6 +189,66 @@ class Quote(UUIDPKMixin, TimestampMixin, Base):
         lazy="selectin",
         cascade="all, delete-orphan",
         order_by="QuoteRejectedCandidate.sort_order",
+    )
+    cohorts: Mapped[list[QuoteCohort]] = relationship(
+        "QuoteCohort",
+        back_populates="quote",
+        lazy="selectin",
+        cascade="all, delete-orphan",
+        foreign_keys="QuoteCohort.quote_id",
+    )
+
+
+class QuoteCohort(UUIDPKMixin, Base):
+    """How many travellers of one residency and one traveller type (§3.8).
+
+    The group vector. A quote's own ``residence_category_id`` describes the
+    client, and a single one cannot describe the group that is actually
+    travelling: the client's confirmed rule is that **non-residents are charged
+    in USD and residents in KES on the same quote**, with separate per-person
+    figures for each. That needs a row per ``(residency, traveller type)``, not a
+    column on the quote.
+
+    ``pax_count`` stays as the shorthand for the common case — a group that is
+    uniform in both respects — and these rows take precedence when present, so
+    the vector is always the single source of the headcount. See
+    :func:`app.modules.quotes.group.build_group`.
+
+    Deliberately *counts*, not named people. A 25-person corporate booking is
+    quoted as "twenty-five, six of them non-resident, two children" long before
+    anyone knows who is coming; ``quote_travellers`` remains for passport-level
+    detail at booking time.
+    """
+
+    __tablename__ = "quote_cohorts"
+    __table_args__ = (
+        UniqueConstraint(
+            "quote_id",
+            "residence_category_id",
+            "traveller_type",
+            name="uq_quote_cohort",
+        ),
+        CheckConstraint("headcount > 0", name="ck_quote_cohort_headcount_positive"),
+    )
+
+    quote_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("quotes.id", ondelete="CASCADE"), nullable=False
+    )
+    residence_category_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("residence_categories.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    # adult | child | infant. Which of the three a given age falls into is the
+    # fee's decision, not the quote's — see park_fees.classify_age — so this
+    # records what the agent entered.
+    traveller_type: Mapped[str] = mapped_column(String(10), nullable=False)
+    # Named `headcount` rather than `count`, which is a SQL function and reads
+    # ambiguously in a query.
+    headcount: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    quote: Mapped[Quote] = relationship(
+        "Quote", back_populates="cohorts", foreign_keys=[quote_id]
     )
 
 

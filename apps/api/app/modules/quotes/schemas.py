@@ -26,6 +26,33 @@ class TravellerIn(BaseModel):
         return self
 
 
+class CohortIn(BaseModel):
+    """One (residency, traveller type) headcount — the group vector's unit (§3.8).
+
+    No currency field. Which currency a residency bills in is a property of the
+    residence category, so accepting one per quote would let two quotes disagree
+    about it.
+    """
+
+    residence_category_id: uuid.UUID
+    traveller_type: str
+    headcount: int = Field(ge=1)
+
+    @model_validator(mode="after")
+    def _check_type(self) -> CohortIn:
+        if self.traveller_type not in TRAVELLER_TYPES:
+            raise ValueError(f"traveller_type must be one of {TRAVELLER_TYPES}")
+        return self
+
+
+class CohortRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    residence_category_id: uuid.UUID
+    traveller_type: str
+    headcount: int
+
+
 class AccommodationSelectionIn(BaseModel):
     accommodation_id: uuid.UUID
     room_type_id: uuid.UUID
@@ -89,6 +116,9 @@ class QuoteCreate(BaseModel):
     discount_pct: Decimal | None = Field(default=None, ge=0, le=100)
     tax_pct: Decimal | None = Field(default=None, ge=0)
     travellers: list[TravellerIn] = Field(default_factory=list)
+    # The group vector. Takes precedence over pax_count when present, because it
+    # is the only form that can express a mixed-residency group (§3.8).
+    cohorts: list[CohortIn] = Field(default_factory=list)
     legs: list[LegIn] = Field(default_factory=list)
     transport: list[TransportIn] = Field(default_factory=list)
 
@@ -225,6 +255,7 @@ class QuoteRead(BaseModel):
     selected_option_id: uuid.UUID | None
     selected_at: datetime | None
     travellers: list[TravellerRead]
+    cohorts: list[CohortRead]
     legs: list[LegRead]
     transport: list[TransportRead]
     options: list[QuoteOptionResolvedRead]

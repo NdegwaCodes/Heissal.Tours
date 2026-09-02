@@ -29,6 +29,31 @@ from app.db.session import AsyncSessionLocal
 from app.main import app
 
 
+def _refuse_non_test_database() -> None:
+    """Refuse to run against a database whose name does not end in ``_test``.
+
+    ``scripts/test_local.sh`` already checks this, but plain ``pytest`` does not
+    go through it: it reads ``.env``, which points at the **live catalogue**. The
+    suite seeds, mutates and deletes, so the only thing that stopped a direct
+    ``pytest`` run from writing to production was the live database happening to
+    be behind on a migration, which is luck rather than a safeguard.
+
+    Collection-time, so it fails before a single fixture opens a connection.
+    """
+    url = settings.DATABASE_URL or ""
+    name = url.rsplit("/", 1)[-1].split("?")[0]
+    if not name.endswith("_test"):
+        raise RuntimeError(
+            f"REFUSING to run tests against database {name!r} — the name does "
+            "not end in '_test'. This suite seeds, mutates and deletes rows.\n"
+            "Run `bash scripts/test_local.sh`, which points DATABASE_URL at a "
+            "throwaway database, rather than pytest directly."
+        )
+
+
+_refuse_non_test_database()
+
+
 @pytest_asyncio.fixture(loop_scope="session")
 async def client() -> AsyncGenerator[AsyncClient, None]:
     transport = ASGITransport(app=app)

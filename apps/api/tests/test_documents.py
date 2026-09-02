@@ -608,7 +608,14 @@ async def test_the_real_fonts_can_be_swapped_in_through_config(
 ):
     h = _h(admin_tokens)
     before = (await client.get(f"{API}/document-config", headers=h)).json()
-    assert before["fonts_are_placeholders"] is True
+    # Since 3.11 the shipped defaults ARE the brand faces, so nothing here is a
+    # placeholder any more. This assertion used to read `is True` and kept
+    # passing only because the shared test database still held a config row
+    # written before that change; it failed the moment the database was rebuilt
+    # from migrations. What the test is for — that type is swappable in one
+    # place — is unaffected either way.
+    assert before["fonts_are_placeholders"] is False
+    assert "Cormorant Garamond" in before["font_display"]
     try:
         patched = await client.patch(
             f"{API}/document-config",
@@ -636,7 +643,10 @@ async def test_the_real_fonts_can_be_swapped_in_through_config(
             json={
                 "font_display": before["font_display"],
                 "font_body": before["font_body"],
-                "fonts_are_placeholders": True,
+                # Restore what was actually there. A literal here is what leaked
+                # `fonts_are_placeholders: True` into the shared database and
+                # kept the stale assertion above alive across runs.
+                "fonts_are_placeholders": before["fonts_are_placeholders"],
                 "company_name": before["company_name"],
             },
         )
