@@ -41,6 +41,8 @@ from app.modules.accommodations.models import (
 )
 from app.modules.currency.fx import AdminExchangeRateProvider
 from app.modules.pricing.service import PricingConfigService
+from app.modules.quotes.cohorts import Group
+from app.modules.quotes.group import build_group, residence_ids
 from app.modules.quotes.models import Quote, QuoteOption, QuoteRejectedCandidate
 from app.modules.quotes.options import (
     BuildUp,
@@ -52,11 +54,9 @@ from app.modules.quotes.options import (
     needs_chef,
     rate_for_occupancy,
     resolve_meal_plan,
-    room_plan,
     stay_nights,
     supplement_cost,
     supplier_paid,
-    uniform_group,
 )
 
 # --------------------------------------------------------------------------- #
@@ -121,6 +121,30 @@ class OptionCosting:
     warnings: list[str] = field(default_factory=list)
 
 
+def _supersedes(
+    candidate: AccommodationRate, current: AccommodationRate, presentation: str
+) -> bool:
+    """Whether ``candidate`` should replace ``current`` for one room-night.
+
+    Two separate tiebreaks, in order:
+
+    1. **Currency.** Since §3.12 a property may publish one room-night in KES,
+       USD and EUR — the same price quoted three ways, for the agent to bill in
+       whichever the client is invoiced in. The one matching the quote's
+       presentation currency wins, so no FX conversion (or its rounding) enters
+       the client's figure. Without this the winner would be whichever row the
+       database happened to return first, which could be the EUR one, for which
+       there may be no exchange rate on file at all.
+    2. **Season.** Otherwise the later ``effective_from`` wins, so a rate loaded
+       to supersede another does.
+    """
+    matches = candidate.currency.upper() == presentation
+    already = current.currency.upper() == presentation
+    if matches != already:
+        return matches
+    return candidate.effective_from > current.effective_from
+
+
 @dataclass(frozen=True)
 class RejectedOption:
     """A property considered but not offered, with wording safe to print."""
@@ -158,12 +182,10 @@ class OptionPricingService:
                 "before pricing."
             )
         nights = stay_nights(quote.arrival_date, quote.departure_date)
-        pax = quote.pax_count or len(quote.travellers)
-        if pax <= 0:
-            raise AppError(
-                "Set pax_count (or add travellers) before pricing options — a "
-                "per-person figure cannot be derived from an empty group."
-            )
+        # The group vector (§3.8) — cohorts if the quote has them, else its
+        # pax_count, else its traveller rows. One place decides, so rooming and
+        # the per-person divisor can no longer come from different counts.
+        group = await build_group(self.db, quote)
         requested_plan = await self._requested_plan_code(quote)
         cfg = await PricingConfigService(self.db).get()
         contingency = (
@@ -172,7 +194,6 @@ class OptionPricingService:
             else cfg.contingency_pct
         )
         profit = quote.profit_pct if quote.profit_pct is not None else cfg.profit_pct
-        is_uniform = uniform_group([t.traveller_type for t in quote.travellers])
 
         result = OptionPricingResult()
         for option in sorted(quote.options, key=lambda o: o.sort_order):
@@ -180,12 +201,11 @@ class OptionPricingService:
                 quote,
                 option,
                 nights=nights,
-                pax=pax,
+                group=group,
                 requested_plan=requested_plan,
                 contingency_pct=contingency,
                 profit_pct=profit,
                 rounding_step=cfg.per_person_rounding,
-                uniform=is_uniform,
                 into=result,
             )
         return result
@@ -252,30 +272,49 @@ class OptionPricingService:
         option: QuoteOption,
         *,
         nights: list[date],
-        pax: int,
+        group: Group,
         requested_plan: str,
         contingency_pct: Decimal,
         profit_pct: Decimal,
         rounding_step: Decimal,
-        uniform: bool,
         into: OptionPricingResult,
     ) -> None:
+        pax = group.pax
         accommodation = await self.db.get(Accommodation, option.accommodation_id)
         if accommodation is None:
             raise NotFoundError(
                 "An option references an accommodation that no longer exists."
             )
 
-        rates = await self._rates(quote, accommodation.id, nights)
+        rates = await self._rates(quote, accommodation.id, nights, group)
         if not rates:
             into.warnings.append(
                 f"{accommodation.name}: no rates are loaded for "
-                f"{nights[0]} to {nights[-1]} for this residence category, so it "
-                f"could not be priced."
+                f"{nights[0]} to {nights[-1]} for "
+                f"{' or '.join(group.residences)}, so it could not be priced."
             )
             return
 
-        available = {code for (_, code) in rates}
+        # A plan is only usable if EVERY residency on the quote has a rate on it.
+        # A property that prices non-residents on full board and residents on
+        # bed and breakfast only cannot offer one comparable board basis to a
+        # mixed group, and quietly pricing each half on a different plan would
+        # put two different holidays on one line.
+        by_residence: dict[str, set[str]] = {}
+        for (_room, code, residence) in rates:
+            by_residence.setdefault(residence, set()).add(code)
+        available = set.intersection(*by_residence.values()) if by_residence else set()
+        if not available and len(group.residences) > 1:
+            into.warnings.append(
+                f"{accommodation.name}: no meal plan has a rate for every "
+                f"residency on this quote ("
+                + "; ".join(
+                    f"{res}: {'/'.join(sorted(codes))}"
+                    for res, codes in sorted(by_residence.items())
+                )
+                + "), so it could not be priced for this group."
+            )
+            return
         plan_code, is_fallback = resolve_meal_plan(requested_plan, available)
         if plan_code is None:
             into.warnings.append(
@@ -287,11 +326,18 @@ class OptionPricingService:
 
         best: RoomTypeQuote | None = None
         shortfalls: list[int] = []
-        for (room_type_id, code), nightly in rates.items():
-            if code != plan_code:
-                continue
+        room_type_ids = {room for (room, code, _res) in rates if code == plan_code}
+        for room_type_id in room_type_ids:
             attempt = await self._price_room_type(
-                quote, room_type_id, nightly, nights=nights, pax=pax
+                quote,
+                room_type_id,
+                {
+                    residence: rates[(room_type_id, plan_code, residence)]
+                    for residence in group.residences
+                    if (room_type_id, plan_code, residence) in rates
+                },
+                nights=nights,
+                group=group,
             )
             if attempt is None:
                 continue
@@ -365,7 +411,11 @@ class OptionPricingService:
             profit_pct=profit_pct,
             agent_cover_fee=option.agent_cover_fee,
             rounding_step=rounding_step,
-            uniform_group=uniform,
+            # A per-person figure is only meaningful when everyone pays the same.
+            # The vector is what finally makes residency part of that judgement:
+            # before it, only traveller type could vary, so a mixed-residency
+            # group got one per-person figure covering two currencies.
+            uniform_group=group.is_uniform,
         )
         into.options.append(
             OptionCosting(
@@ -396,51 +446,68 @@ class OptionPricingService:
         self,
         quote: Quote,
         room_type_id: uuid.UUID,
-        nightly: dict[date, dict[int, AccommodationRate]],
+        per_residence: dict[str, dict[date, dict[int, AccommodationRate]]],
         *,
         nights: list[date],
-        pax: int,
+        group: Group,
     ) -> tuple[RoomTypeQuote | None, int | None] | None:
-        """Cost the whole stay in one room type.
+        """Cost the whole stay in one room type, residency by residency.
 
         Returns ``None`` when the room type cannot house the group at all, and
         ``(None, min_nights)`` when it could but the stay is too short. Keeping
         those two apart is what lets the caller tell a client-facing refusal
         (§3.3a) from an internal gap in the data.
+
+        Rooming partitions by **residency**, so each residency's rooms are
+        costed against its own rate sheet in its own currency (§3.8). Three
+        residents and three non-residents therefore take four twins rather than
+        three: no room can hold one of each and still have a defined rate. The
+        extra room is the honest cost of a mixed group being quotable, and it
+        appears here rather than being discovered at check-in.
         """
         room_type = await self.db.get(RoomType, room_type_id)
         if room_type is None or not room_type.is_active:
             return None
 
-        plan = room_plan(pax, room_type.max_occupancy)
+        rooming = group.rooming(room_type.max_occupancy)
+        plan: list[int] = []
         paid: dict[str, Decimal] = {}
         costed: dict[str, Decimal] = {}
         derived: set[int] = set()
         per_person_basis: set[str] = set()
-        for night in nights:
-            by_occupancy = nightly.get(night)
-            if not by_occupancy:
+        for residence, rooms in rooming.items():
+            nightly = per_residence.get(residence)
+            if not nightly:
+                # This residency has no rate on this room type. Dropping the
+                # room type is right: pricing the rest of the group in it and
+                # silently housing these travellers somewhere else is not a
+                # quote anybody could honour.
                 return None
-            for guests in plan:
-                found = rate_for_occupancy(by_occupancy, guests)
-                if found is None:
+            plan.extend(rooms)
+            for night in nights:
+                by_occupancy = nightly.get(night)
+                if not by_occupancy:
                     return None
-                used, rate = found
-                if not meets_minimum_stay(len(nights), rate.min_nights):
-                    assert rate.min_nights is not None
-                    return None, rate.min_nights
-                if used != guests:
-                    derived.add(guests)
-                    if rate.single_supplement is not None:
-                        per_person_basis.add(room_type.name)
-                amount = rate.rate_per_night
-                currency = rate.currency.upper()
-                paid[currency] = paid.get(currency, Decimal(0)) + supplier_paid(
-                    amount, rate.supplier_discount_pct
-                )
-                costed[currency] = costed.get(currency, Decimal(0)) + costed_rate(
-                    amount, rate.supplier_discount_pct, rate.rate_kind
-                )
+                for guests in rooms:
+                    found = rate_for_occupancy(by_occupancy, guests)
+                    if found is None:
+                        return None
+                    used, rate = found
+                    if not meets_minimum_stay(len(nights), rate.min_nights):
+                        assert rate.min_nights is not None
+                        return None, rate.min_nights
+                    if used != guests:
+                        derived.add(guests)
+                        if rate.single_supplement is not None:
+                            per_person_basis.add(room_type.name)
+                    amount = rate.rate_per_night
+                    currency = rate.currency.upper()
+                    paid[currency] = paid.get(currency, Decimal(0)) + supplier_paid(
+                        amount, rate.supplier_discount_pct
+                    )
+                    costed[currency] = costed.get(currency, Decimal(0)) + costed_rate(
+                        amount, rate.supplier_discount_pct, rate.rate_kind
+                    )
 
         warnings: list[str] = []
         if derived:
@@ -504,9 +571,15 @@ class OptionPricingService:
         return plan
 
     async def _rates(
-        self, quote: Quote, accommodation_id: uuid.UUID, nights: list[date]
-    ) -> dict[tuple[uuid.UUID, str], dict[date, dict[int, AccommodationRate]]]:
-        """Every usable rate, indexed by room type, plan, night and occupancy.
+        self,
+        quote: Quote,
+        accommodation_id: uuid.UUID,
+        nights: list[date],
+        group: Group,
+    ) -> dict[
+        tuple[uuid.UUID, str, str], dict[date, dict[int, AccommodationRate]]
+    ]:
+        """Every usable rate, indexed by room type, plan, residency, night, occupancy.
 
         One query for the whole property, then indexed in Python: a ten-night
         stay across four room types and three occupancies would otherwise be 120
@@ -515,7 +588,19 @@ class OptionPricingService:
         Where two rates overlap a night, the later ``effective_from`` wins — the
         same tiebreak :class:`AccommodationRateService` uses, so a rate loaded to
         supersede another does so here too.
+
+        Fetched for **every residency on the quote**, not just the quote's own
+        category: a mixed group is priced off two sheets in two currencies, and
+        one query for all of them keeps the round trips at one per property.
+
+        Where a property publishes the same room-night in more than one currency
+        (§3.12), the one matching the quote's presentation currency wins, because
+        billing in the currency the supplier quoted removes an FX conversion —
+        and its rounding — from the client's figure entirely.
         """
+        keys = group.residences
+        ids = await residence_ids(self.db, keys)
+        by_id = {value: name for name, value in ids.items()}
         stmt = (
             select(AccommodationRate, MealPlan.code)
             .join(MealPlan, MealPlan.id == AccommodationRate.meal_plan_id)
@@ -523,7 +608,7 @@ class OptionPricingService:
             .where(
                 RoomType.accommodation_id == accommodation_id,
                 RoomType.is_active.is_(True),
-                AccommodationRate.residence_category_id == quote.residence_category_id,
+                AccommodationRate.residence_category_id.in_(ids.values()),
                 AccommodationRate.is_active.is_(True),
                 AccommodationRate.effective_from <= nights[-1],
                 AccommodationRate.effective_to >= nights[0],
@@ -531,16 +616,22 @@ class OptionPricingService:
         )
         rows = list((await self.db.execute(stmt)).all())
 
-        index: dict[tuple[uuid.UUID, str], dict[date, dict[int, AccommodationRate]]] = {}
+        presentation = quote.presentation_currency.upper()
+        index: dict[
+            tuple[uuid.UUID, str, str], dict[date, dict[int, AccommodationRate]]
+        ] = {}
         for rate, code in rows:
-            key = (rate.room_type_id, code.upper())
+            residence = by_id.get(rate.residence_category_id)
+            if residence is None:
+                continue
+            key = (rate.room_type_id, code.upper(), residence)
             per_night = index.setdefault(key, {})
             for night in nights:
                 if not (rate.effective_from <= night <= rate.effective_to):
                     continue
                 slot = per_night.setdefault(night, {})
                 current = slot.get(rate.occupancy)
-                if current is None or rate.effective_from > current.effective_from:
+                if current is None or _supersedes(rate, current, presentation):
                     slot[rate.occupancy] = rate
         return index
 

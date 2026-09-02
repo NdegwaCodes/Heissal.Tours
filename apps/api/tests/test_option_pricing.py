@@ -839,3 +839,173 @@ async def test_a_property_with_no_rates_is_an_internal_warning_not_a_refusal(
     assert result["options"] == []
     assert result["rejected"] == []
     assert any("no rates are loaded" in w for w in result["warnings"])
+
+
+# --------------------------------------------------------------------------- #
+# Stage 3.8 — pricing on the group vector
+# --------------------------------------------------------------------------- #
+
+
+async def _cohort_quote(client, h, ids, *, cohorts, accommodations, **over):
+    """A quote whose group is given as cohorts rather than a flat headcount."""
+    record = await _client_record(client, h, ids["residence_citizen"])
+    body = {
+        "client_id": record["id"],
+        "presentation_currency": "KES",
+        "residence_category_id": ids["residence_citizen"],
+        "arrival_date": "2026-07-01",
+        "departure_date": "2026-07-04",
+        "requested_meal_plan_id": ids["meal_plan_fb"],
+        "cohorts": [
+            {
+                "residence_category_id": ids[f"residence_{residence}"],
+                "traveller_type": kind,
+                "headcount": n,
+            }
+            for residence, kind, n in cohorts
+        ],
+        "options": [
+            {"accommodation_id": ids[key], "sort_order": order}
+            for order, key in enumerate(accommodations, start=1)
+        ],
+    }
+    body.update(over)
+    resp = await client.post(f"{API}/quotes", headers=h, json=body)
+    assert resp.status_code == 201, resp.text
+    return resp.json()
+
+
+async def test_a_mixed_residency_group_takes_an_extra_room(
+    client, admin_tokens, sample_catalogue
+):
+    """Three citizens and three non-residents need **four** twins, not three.
+
+    Rooming partitions by residency because the two halves are priced off
+    different sheets in different currencies, and no room can hold one of each
+    and still have a defined rate. Six people in twins is three rooms by
+    ``ceil``; this is the one case where that is the wrong answer, and getting it
+    wrong is a room nobody booked discovered at check-in.
+    """
+    h, ids = _h(admin_tokens), sample_catalogue
+    quote = await _cohort_quote(
+        client,
+        h,
+        ids,
+        cohorts=[("citizen", "adult", 3), ("non_resident", "adult", 3)],
+        accommodations=["acc_sto_full_board"],
+    )
+    option = _option(await _price(client, h, quote["id"]), "Coral Sands")
+
+    assert option["rooms_required"] == 4
+    # Mixed residency means two currencies and two prices, so a single
+    # per-person figure would be a fiction (§3.6).
+    assert option["per_person"] is None
+    assert D(option["group_total"]) > 0
+
+
+async def test_each_residency_is_costed_off_its_own_sheet(
+    client, admin_tokens, sample_catalogue
+):
+    """Coral Sands quotes citizens 9,000 KES a twin and non-residents 180 USD.
+
+    A mixed group must cost more than the same headcount of citizens alone —
+    both because the non-resident sheet is dearer and because of the extra room.
+    Pricing the whole group off the quote's own category, which is what happened
+    before the vector, quietly under-charged every non-resident.
+    """
+    h, ids = _h(admin_tokens), sample_catalogue
+    mixed = await _cohort_quote(
+        client,
+        h,
+        ids,
+        cohorts=[("citizen", "adult", 3), ("non_resident", "adult", 3)],
+        accommodations=["acc_sto_full_board"],
+    )
+    residents_only = await _cohort_quote(
+        client,
+        h,
+        ids,
+        cohorts=[("citizen", "adult", 6)],
+        accommodations=["acc_sto_full_board"],
+    )
+
+    mixed_option = _option(await _price(client, h, mixed["id"]), "Coral Sands")
+    resident_option = _option(
+        await _price(client, h, residents_only["id"]), "Coral Sands"
+    )
+
+    assert resident_option["rooms_required"] == 3
+    assert mixed_option["rooms_required"] == 4
+    assert D(mixed_option["group_total"]) > D(resident_option["group_total"])
+    # An all-citizen group is uniform, so it still gets a per-person figure.
+    assert resident_option["per_person"] is not None
+
+
+async def test_a_property_that_prices_only_one_residency_is_not_offered(
+    client, admin_tokens, sample_catalogue
+):
+    """Baobab Beach has citizen rates and no non-resident sheet.
+
+    It cannot house a mixed group, and the honest answer is to leave it off
+    rather than price the residents and house the rest on a rate nobody quoted.
+    The reason stays an internal warning, not a client-facing rejection: "we
+    have no non-resident rates loaded" is a statement about our data (§3.3a).
+    """
+    h, ids = _h(admin_tokens), sample_catalogue
+    quote = await _cohort_quote(
+        client,
+        h,
+        ids,
+        cohorts=[("citizen", "adult", 2), ("non_resident", "adult", 2)],
+        accommodations=["acc_rack_discounted"],
+    )
+    result = await _price(client, h, quote["id"])
+
+    assert result["options"] == []
+    assert result["rejected"] == []
+
+
+async def test_the_headcount_and_the_rooming_come_from_one_place(
+    client, admin_tokens, sample_catalogue
+):
+    """A quote carrying both a headcount and named travellers used to be able to
+    room one count and divide by another. The vector is now the single source,
+    so the rooming and the per-person divisor always agree.
+
+    Two named travellers beside ``pax_count`` of 2: the rows are the better
+    answer, because they carry the adult/child split the headcount cannot.
+    """
+    h, ids = _h(admin_tokens), sample_catalogue
+    quote = await _quote(
+        client,
+        h,
+        ids,
+        accommodations=["acc_sto_full_board"],
+        pax=2,
+        travellers=[
+            {"traveller_type": "adult"},
+            {"traveller_type": "child", "age": 8},
+        ],
+    )
+    option = _option(await _price(client, h, quote["id"]), "Coral Sands")
+    assert option["rooms_required"] == 1
+    # Adult plus child is not uniform, so no per-person figure (§3.4a).
+    assert option["per_person"] is None
+
+
+async def test_a_headcount_beside_a_few_named_guests_still_wins(
+    client, admin_tokens, sample_catalogue
+):
+    """25 people of whom two are named is 25 travelling, not 2. The headcount
+    says something the rows do not, so it is the authority."""
+    h, ids = _h(admin_tokens), sample_catalogue
+    quote = await _quote(
+        client,
+        h,
+        ids,
+        accommodations=["acc_sto_full_board"],
+        pax=25,
+        travellers=[{"traveller_type": "adult"}, {"traveller_type": "adult"}],
+    )
+    option = _option(await _price(client, h, quote["id"]), "Coral Sands")
+    assert option["rooms_required"] == 13

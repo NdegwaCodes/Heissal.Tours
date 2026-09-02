@@ -136,3 +136,28 @@ default, because its own `finally` block wrote the literal `True` back each run.
 the first time the database was rebuilt from migrations. **Run `RESET_DB=1
 bash scripts/test_local.sh` before believing a green suite** after changing a config
 default or a seeded value.
+
+## The suite must survive being run twice against the same database
+
+Two failures in one session came from tests leaving shared state behind, and **both were
+invisible on a fresh database**:
+
+| Test | What it left behind | What broke, and when |
+|---|---|---|
+| `test_the_real_fonts_can_be_swapped_in_through_config` | wrote `fonts_are_placeholders: True` back in its own `finally` | its own stale assertion kept passing for a week after 3.11 changed the default |
+| `test_exchange_rate_create_and_list` | a USD->KES rate of 129.50 on the seeded 130.00's date | every USD conversion on the **second** run; 70,200 became 69,930 |
+
+The FX one is the sharper lesson. The provider tiebreaks on `created_at` so an admin can
+correct a rate by re-entering it for the same date — correct behaviour — which made the
+leftover row the winner. Inside a single fresh run nothing noticed, because `test_reference`
+sorts after `test_option_pricing`. It only appeared on a re-run.
+
+So `RESET_DB=1 bash scripts/test_local.sh` proves nothing on its own. **Run it twice:**
+
+```bash
+RESET_DB=1 bash scripts/test_local.sh -q   # fresh
+bash scripts/test_local.sh -q              # again, same database
+```
+
+A test that mutates shared catalogue data uses its own throwaway rows — a synthetic currency
+pair (`"T" + uuid4().hex[:2].upper()`), its own property — never USD/KES or a seeded id.

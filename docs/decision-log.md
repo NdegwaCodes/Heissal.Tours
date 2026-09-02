@@ -772,3 +772,33 @@ counts the rows per property and the importer prints them under their own headin
 run, so the size of the assumption is restated each time rather than being a default nobody
 remembers choosing. If a property later confirms it is exclusive, that report is the list of
 what to re-import.
+
+**A meal plan must have a rate for every residency on the quote** (Stage 3.8, 2026-09-02)
+Pricing an option now looks up rates for each residency in the group vector, which raises a
+question a single-residency quote never had: what if a property prices non-residents on full
+board and residents on bed and breakfast only? The available plans are therefore
+**intersected** across residencies rather than unioned. Pricing each half of the group on the
+plan its own sheet happens to offer would put two different holidays on one line of a
+quotation and call them comparable. If no plan survives the intersection the property is left
+off with an internal warning naming what each residency does have, because "we have no
+non-resident rates loaded" is a statement about our data, not about the hotel (§3.3a).
+
+**Where a room-night exists in several currencies, the presentation currency wins**
+(Stage 3.8, 2026-09-02)
+§3.12 stores all of a rate card's currencies. Selecting one is the pricing engine's job, and
+the tiebreak runs currency first, then season: a rate quoted in the currency the client is
+being invoiced in needs no FX conversion, so neither its rate risk nor its rounding reaches
+the client's figure. Without this the winner was whichever row Postgres returned first, which
+on the client's corpus could be the EUR row — for which there is no exchange rate on file at
+all, making the property unpriceable while a usable USD figure sat beside it.
+
+**`pax_count` outranks the traveller rows only when it says something they do not**
+(Stage 3.8, 2026-09-02)
+The first cut of `build_group` gave `pax_count` flat precedence, which broke a quote carrying
+both: two named travellers (one adult, one child) beside `pax_count` of 2 flattened into "2
+adults", read as uniform, and got a single per-person figure that a mixed group must not have.
+So the headcount wins only where it *differs* from the number of rows — 25 people of whom two
+are named is 25 travelling, and nobody has said what the other 23 are — and otherwise the rows
+win, because they carry the adult/child split as well as the total. Caught by an existing
+test, which is the argument for having asserted the mixed-group case as a number rather than
+as behaviour.

@@ -71,24 +71,41 @@ async def test_destination_crud_and_rbac(client, admin_tokens):
 
 
 async def test_exchange_rate_create_and_list(client, admin_tokens):
+    """Deliberately a synthetic currency pair, not USD/KES.
+
+    This used to post USD->KES at 129.50 for 2026-01-01 — the same date the demo
+    catalogue seeds at 130.00 — and never clean it up. The FX provider tiebreaks
+    on ``created_at`` so an admin can correct a rate by re-entering it, which
+    means the 129.50 row left behind became the newest and *won*. Inside one
+    fresh run nothing noticed, because this file sorts after
+    ``test_option_pricing``; on the **second** run against the same database
+    every USD conversion shifted and the hand-worked 70,200 became 69,930.
+
+    The rule the whole conftest is built on: a test that mutates shared
+    catalogue data uses its own throwaway rows.
+    """
     h = {"Authorization": f"Bearer {admin_tokens['access_token']}"}
+    # The same synthetic-code pattern test_pricing.py uses for exactly this.
+    base = "T" + uuid.uuid4().hex[:2].upper()
+    quote = "Q" + uuid.uuid4().hex[:2].upper()
     resp = await client.post(
         f"{API}/exchange-rates",
         headers=h,
         json={
-            "base_currency": "USD",
-            "quote_currency": "KES",
+            "base_currency": base,
+            "quote_currency": quote,
             "rate": "129.50",
             "effective_from": "2026-01-01",
         },
     )
     assert resp.status_code == 201, resp.text
-    assert resp.json()["base_currency"] == "USD"
+    assert resp.json()["base_currency"] == base
 
     resp = await client.get(f"{API}/exchange-rates", headers=h)
     assert resp.status_code == 200
     assert any(
-        r["base_currency"] == "USD" and r["quote_currency"] == "KES" for r in resp.json()
+        r["base_currency"] == base and r["quote_currency"] == quote
+        for r in resp.json()
     )
 
 

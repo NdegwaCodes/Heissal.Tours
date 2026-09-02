@@ -24,6 +24,7 @@ category (§3.8) rather than a per-quote choice.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Iterable
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -51,7 +52,15 @@ async def build_group(db: AsyncSession, quote: Quote) -> Group:
 
     own = _key(categories, quote.residence_category_id)
 
-    if quote.pax_count:
+    # ``pax_count`` outranks the traveller rows only when it says something they
+    # do not. Where it merely restates their total, the rows are strictly more
+    # informative — they carry the adult/child split — and taking the headcount
+    # instead would silently flatten a mixed group into all-adults, which then
+    # reads as uniform and gets a single per-person figure it should not have.
+    #
+    # A headcount of 25 beside two named guests is the other case: it is the
+    # authority, because nobody has said what the other 23 are.
+    if quote.pax_count and quote.pax_count != len(quote.travellers):
         return _build([(own, "adult", quote.pax_count)], categories)
 
     if quote.travellers:
@@ -70,6 +79,27 @@ async def build_group(db: AsyncSession, quote: Quote) -> Group:
         "This quote has nobody travelling on it. Set pax_count, add cohorts, or "
         "add travellers before pricing it."
     )
+
+
+async def residence_ids(db: AsyncSession, keys: Iterable[str]) -> dict[str, uuid.UUID]:
+    """Residence-category ids for the given keys, for querying rates by residency.
+
+    The pure layer works in keys (``citizen``, ``non_resident``) because a key is
+    what a rate sheet and a fee schedule both name; the database works in ids.
+    This is the one translation, so the pricing service never grows a second.
+    """
+    wanted = set(keys)
+    rows = (
+        (await db.execute(select(ResidenceCategory).where(ResidenceCategory.key.in_(wanted))))
+        .scalars()
+        .all()
+    )
+    found = {row.key: row.id for row in rows}
+    if missing := sorted(wanted - set(found)):
+        raise AppError(
+            f"These residence categories are not in this database: {', '.join(missing)}."
+        )
+    return found
 
 
 def _build(
