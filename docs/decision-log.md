@@ -863,3 +863,48 @@ rate, where a lazy lookup would let a rate change between two cohorts of the sam
 the totals would then not reconcile with the per-person figures they came from. A pair that is
 genuinely absent raises with both currencies named rather than defaulting to 1 — the failure
 mode a missing rate deserves, since a silent 1.0 would quote dollars as shillings.
+
+**An option is a package of legs; a single property is a package of one** (Stage 3.9,
+2026-09-03)
+The client asked for **2 or 3 destinations in a single 7–30 day trip**, which an option
+carrying one `accommodation_id` cannot express. `quote_option_legs` holds an ordered set of
+(destination, property, per-leg meal plan, date range), and `QuoteOption.accommodation_id`
+stays as the single-leg shorthand with the legs taking precedence — the same precedence the
+group vector uses over `pax_count`, so one place answers "what is this option?".
+
+`_price_one` became `_price_leg` plus a thin orchestrator, so a one-hotel quote and a
+three-destination trip run the *same* code and there is no second implementation to drift.
+The legs are **summed, not compared**: they are one offer, not alternatives, and if any leg
+cannot be priced the whole package is dropped, because half a trip is not something to put in
+front of a client. `rooms_required` is the maximum across legs rather than the sum — legs are
+sequential, so summing would book a room in Diani for a night spent in the Mara.
+
+Meal plan is a per-leg choice, and an explicit one is **not** a fallback. A day out of the
+hotel makes half board the right plan rather than a failure to secure full board, and the
+document has to be able to tell those apart.
+
+**Contiguity is blocking, and checked twice** (Stage 3.9, 2026-09-03)
+A one-night gap between legs is a night the client has no bed; a one-night overlap is a night
+paid for twice in two towns. Neither is visible on a finished document — the per-person figure
+is exactly as plausible either way — so they cannot be warnings. Checked at **creation**,
+because there is no reason to store an incoherent package, and again at **readiness**, because
+a quote's arrival or departure can move afterwards and silently break a package that was
+correct when built.
+
+Two things deliberately *not* blocking. A repeated destination is a note: Nairobi at both ends
+of a safari is the commonest itinerary in Kenya, and the reason to surface it at all is that
+the other cause is a copied leg nobody re-pointed. And legs are ordered by `sequence`, never
+by date — sorting by date would silently repair a mis-sequenced package into a valid-looking
+one, hiding the mistake instead of reporting it.
+
+Minimum stay changes meaning for a package. For a single property it drops the option from the
+comparison and says so on the document (§3.3a); for a package it is blocking, because the
+package is one offer and a leg that cannot be booked makes the whole thing unbookable rather
+than shorter.
+
+**Dropping `uq_quote_option_accommodation`** (Stage 3.9, 2026-09-03)
+It meant "do not offer the same hotel twice", which stopped being expressible as a column pair:
+two curated packages can legitimately share a property on one leg and differ on another —
+Nairobi then Mara against Nairobi then Amboseli. The intent survives as a service check
+comparing whole leg *sequences*, which is the thing that actually has to be distinct, and the
+old single-property check still applies between two options that both have no legs.

@@ -161,8 +161,20 @@ backend-only and the client sees per-person and group totals only.
   - **Open with the client:** the KWS MICE group-discount ladder is ambiguous and is shipped
     switched off (see decision log); Mara conservancy fees are often already inside a lodge
     rate, which is a double-charge risk once conservancies are priced
-- ☐ 3.9 Packages — one property per leg, meal plan per leg with the agent's choice separated
-  from the engine's result, leg-date contiguity as a blocking check, per-leg minimum stay
+- ☑ 3.9 Packages (`app/modules/quotes/packages.py` + `quote_option_legs`, migration
+  `c72ba3d81f45`, 27 pure + 12 end-to-end tests) — an option is now an ordered set of legs,
+  each a destination, a property, a per-leg meal plan and a date range; a single property is a
+  package of one, priced by the same code. Legs are **summed, not compared**, and a leg that
+  cannot be priced drops the whole package
+  - `rooms_required` is the **maximum** across legs, not the sum — legs are sequential, so
+    summing would book a room in Diani for a night spent in the Mara
+  - Contiguity is **blocking and checked twice** — at creation and again at readiness, because
+    a quote's dates can move afterwards and break a package that was correct when built. A gap
+    is a night with no bed, an overlap a night paid for twice, and neither shows on a document
+  - A per-leg meal plan is an exact choice, **not** a fallback; a repeated destination is a
+    note, not a fault; legs order by `sequence` and never by date
+  - Dropped `uq_quote_option_accommodation` — two packages may share a property and differ on
+    a later leg. Replaced by a service check over whole leg sequences (see decision log)
 - ☐ 3.10 Transport pricing — per transition plus arrival and departure, flights named and
   unpriced, airport transfers charged, transfers validated per line-haul
 - ☐ 3.11 The curated package x transport table
