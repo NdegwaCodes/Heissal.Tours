@@ -28,12 +28,15 @@ from app.modules.quotes.models import (
     QuoteOption,
     QuoteOptionLeg,
     QuoteTransport,
+    QuoteTransportSegment,
     QuoteTraveller,
 )
 from app.modules.quotes.packages import Leg
 from app.modules.quotes.packages import blocking as blocking_problems
 from app.modules.quotes.packages import check as check_package
 from app.modules.quotes.schemas import QuoteCreate
+from app.modules.quotes.transport import check as check_transport
+from app.modules.quotes.transport import segments_of
 from app.modules.residence.models import ResidenceCategory
 
 
@@ -190,6 +193,24 @@ class QuoteService:
                     days=tr.days,
                 )
             )
+        for seg in payload.transport_segments:
+            quote.transport_segments.append(
+                QuoteTransportSegment(
+                    sequence=seg.sequence,
+                    kind=seg.kind,
+                    mode=seg.mode,
+                    travel_class=seg.travel_class,
+                    destination_id=seg.destination_id,
+                    vehicle_id=seg.vehicle_id,
+                    vehicle_type=seg.vehicle_type,
+                    units=seg.units,
+                    travel_date=seg.travel_date,
+                    is_optional=seg.is_optional,
+                    is_vvip=seg.is_vvip,
+                    description=seg.description,
+                )
+            )
+        self._check_transport(quote)
 
         self.db.add(quote)
         try:
@@ -262,6 +283,35 @@ class QuoteService:
                 "same properties on the same dates. Offer it once."
             )
         seen.add(signature)
+
+    @staticmethod
+    def _check_transport(quote: Quote) -> None:
+        """Refuse transport that could not be sold as typed (§3.10).
+
+        Only the blocking faults — a mode we hold no licence for, a kind
+        nothing knows how to price, a rail leg without the transfers it drags
+        with it. The advisory ones (a shortfall of movements, a flight to name,
+        VVIP inside the package) belong at readiness, where the agent is asking
+        "is this ready to send" rather than "did that save".
+
+        Checked here as well as at readiness for the reason packages are: a
+        stored fault prices cleanly and wrongly, and the earlier it is refused
+        the less there is to unpick.
+        """
+        problems = blocking_problems(
+            check_transport(
+                segments_of(quote.transport_segments),
+                legs=max(
+                    [len(option.legs) for option in quote.options if option.legs]
+                    or [1]
+                ),
+            )
+        )
+        if problems:
+            raise AppError(
+                "This quote's transport cannot be sold as entered: "
+                + " ".join(f"({p.code}) {p.message}" for p in problems)
+            )
 
     async def _attach_cohorts(self, quote: Quote, rows: list) -> None:
         """Validate and attach the group vector (§3.8).

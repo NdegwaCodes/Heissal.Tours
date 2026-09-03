@@ -84,6 +84,57 @@ class TransportIn(BaseModel):
     days: int = Field(default=1, ge=1)
 
 
+class TransportSegmentIn(BaseModel):
+    """One movement on the quote: a line haul or a transfer leg (§3.10).
+
+    Distinct from :class:`TransportIn`, which is the Stage 2 km-and-fuel safari
+    vehicle model and stays for game-drive costing.
+
+    ``kind`` and ``mode`` are not constrained to literals here on purpose. The
+    vocabulary and the reasons behind it — why ``air`` is named and never
+    priced, why rail drags transfers with it — live in
+    :mod:`app.modules.quotes.transport`, and a second copy in the schema would
+    be a second thing to keep in step. Creation refuses an unsellable mode with
+    that module's own wording, which says *why* rather than listing the
+    permitted values.
+    """
+
+    sequence: int = Field(default=0, ge=0)
+    kind: str = Field(max_length=20)
+    mode: str = Field(max_length=10)
+    travel_class: str = Field(default="", max_length=20)
+    destination_id: uuid.UUID | None = None
+    # Set for a movement run on our own or a hired vehicle, which is costed by
+    # the fleet model rather than from a transfer tariff.
+    vehicle_id: uuid.UUID | None = None
+    vehicle_type: str | None = Field(default=None, max_length=40)
+    units: int = Field(default=1, ge=1)
+    # NULL prices at the quote's arrival date. Given, it prices at the tariff
+    # effective that day, so a return leg after a fare revision is not charged
+    # at the outbound fare.
+    travel_date: date | None = None
+    is_optional: bool = False
+    is_vvip: bool = False
+    description: str | None = None
+
+
+class TransportSegmentRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    sequence: int
+    kind: str
+    mode: str
+    travel_class: str
+    destination_id: uuid.UUID | None
+    vehicle_id: uuid.UUID | None
+    vehicle_type: str | None
+    units: int
+    travel_date: date | None
+    is_optional: bool
+    is_vvip: bool
+    description: str | None
+
+
 class OptionLegIn(BaseModel):
     """One leg of a curated multi-destination package (§3.9).
 
@@ -166,6 +217,9 @@ class QuoteCreate(BaseModel):
     cohorts: list[CohortIn] = Field(default_factory=list)
     legs: list[LegIn] = Field(default_factory=list)
     transport: list[TransportIn] = Field(default_factory=list)
+    # The journey (§3.10) — line hauls and transfer legs, priced from the
+    # destination tariffs and charged into every option.
+    transport_segments: list[TransportSegmentIn] = Field(default_factory=list)
 
     # -- Stage 3 group quoting (design doc §3.3-§3.7) --------------------- #
     # A 25-person corporate booking is a headcount, not 25 traveller rows.
@@ -306,6 +360,7 @@ class QuoteRead(BaseModel):
     cohorts: list[CohortRead]
     legs: list[LegRead]
     transport: list[TransportRead]
+    transport_segments: list[TransportSegmentRead]
     options: list[QuoteOptionResolvedRead]
     rejected_candidates: list[RejectedCandidateFullRead]
 
@@ -473,6 +528,28 @@ class SupplementChargeInternal(BaseModel):
     cost: Decimal
 
 
+class TransportChargeInternal(BaseModel):
+    """One movement as it was costed (§3.10). Internal: these are tariffs.
+
+    The unit amount is kept beside the multiplied-out cost because a fare that
+    cannot be checked against the operator's own published figure cannot be
+    reconciled at all.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+    sequence: int
+    kind: str
+    mode: str
+    label: str
+    basis: str
+    units: int
+    unit_amount: Decimal
+    currency: str
+    cost: Decimal
+    is_optional: bool
+    is_vvip: bool
+
+
 class PricedLegRead(BaseModel):
     """One leg of a priced package, as the client sees it (§3.9).
 
@@ -541,6 +618,13 @@ class QuoteOptionClientRead(BaseModel):
     # The rates used to reach a group total spanning currencies. A converted
     # total with an unstated rate is a dispute waiting to happen.
     conversions: dict[str, Decimal] = Field(default_factory=dict)
+    # Flights on the itinerary, named and unpriced (§3.10). Client-facing on
+    # purpose: the fare is an exclusion, and a client who is not told to book
+    # their own ticket is a client who arrives without one.
+    transport_named: list[str] = Field(default_factory=list)
+    # What the add-ons sell for — VVIP transport and the rest. A price, not the
+    # cost behind it, and never part of group_total.
+    optional_transport_price: Decimal = Decimal(0)
 
 
 class QuoteOptionInternalRead(QuoteOptionClientRead):
@@ -556,6 +640,14 @@ class QuoteOptionInternalRead(QuoteOptionClientRead):
     warnings: list[str]
     # Overrides the client's leg rows with the fallback reason included.
     legs: list[PricedLegInternalRead] = Field(default_factory=list)
+    # The journey as costed (§3.10). Identical across options, because it is
+    # the same journey whichever hotel is chosen.
+    transport: list[TransportChargeInternal] = Field(default_factory=list)
+    transport_optional: list[TransportChargeInternal] = Field(default_factory=list)
+    optional_transport_total: Decimal = Decimal(0)
+    # Movements with no tariff on file. Blocking at readiness: a movement
+    # priced at zero reads on a document as one the client is not charged for.
+    unpriced_transport: list[str] = Field(default_factory=list)
 
 
 class RejectedCandidateRead(BaseModel):

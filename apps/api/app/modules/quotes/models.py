@@ -629,6 +629,13 @@ class QuoteTransportSegment(UUIDPKMixin, TimestampMixin, Base):
     vehicle_type: Mapped[str | None] = mapped_column(String(40), nullable=True)
     # Tickets, vehicles or legs, depending on the tariff cost basis.
     units: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    # When this movement happens, which is which tariff applies (§3.10). Tariffs
+    # are effective-dated and fares move mid-trip: a return rail leg after a
+    # fare revision is a different price from the outbound one, and pricing the
+    # whole quote at the arrival-date tariff would quietly under-charge it.
+    # NULL falls back to the quote's arrival date, so the common same-week
+    # journey needs nothing typed.
+    travel_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     # VVIP upgrades are an optional client-facing extra, not part of the package.
     is_optional: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     is_vvip: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)

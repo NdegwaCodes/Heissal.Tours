@@ -908,3 +908,53 @@ two curated packages can legitimately share a property on one leg and differ on 
 Nairobi then Mara against Nairobi then Amboseli. The intent survives as a service check
 comparing whole leg *sequences*, which is the thing that actually has to be distinct, and the
 old single-property check still applies between two options that both have no legs.
+
+**Transport is charged into every option, not beside them** (Stage 3.10, 2026-09-04)
+It is the same journey whichever hotel the client picks, so it is priced once per quote and
+added to each option's build-up. Outside the options, the cheapest bed would look like the
+cheapest trip — and a client compares trips. It also keeps the comparison between options a
+comparison of the beds, which is the only thing that actually differs between them.
+
+**A movement with no tariff blocks; it is never priced at zero** (Stage 3.10, 2026-09-04)
+Zero is the dangerous answer: on a finished document it is indistinguishable from a leg the
+client is genuinely not being charged for, and the whole cost of that movement is then missing
+from every option. So an unpriced movement is recorded and blocks at readiness. For the same
+reason a segment naming no destination is refused at creation — every fare is keyed on a
+destination, so there is nothing to price it from, and the agent is one field away from a
+correct quote.
+
+**A shortfall of movements is advice, not a refusal** (Stage 3.10, 2026-09-04)
+A journey is one movement per transition plus arrival and departure (`legs + 1`), derived from
+the package rather than trusted from what was typed. But a client arranging their own airport
+run is a real case, so a shortfall is reported rather than refused. A segment on our own or a
+hired vehicle satisfies the check outright: the fleet model charges per vehicle per day and
+covers every movement at once, so counting legs alone would false-positive on the commonest
+case — and that segment is not charged a transfer tariff either, or the same drive would be
+billed twice.
+
+**Flights are unpriceable, not merely unpriced** (Stage 3.10, 2026-09-04)
+Heissal holds no ticketing licence, so `air` is not a tariff lookup that happens to be empty —
+an empty lookup would one day be filled in and start selling something we cannot sell. A
+flight segment is named on the itinerary, reported so the fare reaches the exclusions, and
+never enters the money. The flight's name is client-facing: a client who is not told to book
+their own ticket is a client who arrives without one.
+
+**Each movement prices at its own date** (Stage 3.10, 2026-09-04)
+`quote_transport_segments.travel_date` (migration `d5a3e81c60b9`, nullable, defaulting to the
+quote's arrival date). Tariffs are effective-dated because fares move, so a return rail leg
+after a revision is a different price from the outbound one; pricing a whole quote at one
+instant under-charged it with nothing showing. The same reason accommodation is selected per
+night rather than per stay (§3.1).
+
+VAT on these two tables is normalised **on the way out**, not at ingestion like every other
+rate: they are entered by hand and carry the flag, so the gross-up happens once in
+`_tariff_for` rather than at five call sites that each have to remember it.
+
+**An add-on is marked up like everything else** (Stage 3.10, 2026-09-04)
+VVIP transport is quoted apart from the package so the options stay a comparison of the same
+journey — but through the same build-up, contingency and margin included. An add-on offered at
+cost is an add-on sold at a loss. The cost stays internal; the client sees the price.
+
+A transfer tariff is keyed on its route, and one route is not another: town-to-terminus is not
+terminus-to-hotel. Where the named route has no rate the nearest row is used and **said out
+loud**, because a plausible figure for the wrong drive is the error nobody goes looking for.

@@ -46,6 +46,7 @@ from app.modules.quotes.schemas import (
     RejectedCandidateRead,
     SelectOptionIn,
     SupplementChargeInternal,
+    TransportChargeInternal,
 )
 from app.modules.quotes.service import QuoteService
 from app.modules.users.models import User
@@ -208,6 +209,8 @@ def _client_option(costing: OptionCosting) -> QuoteOptionClientRead:
         conversions=(
             dict(costing.cohort_prices.conversions) if costing.cohort_prices else {}
         ),
+        transport_named=costing.transport_named,
+        optional_transport_price=costing.optional_transport_price,
     )
 
 
@@ -241,6 +244,15 @@ def _internal_option(costing: OptionCosting) -> QuoteOptionInternalRead:
         ],
         build_up=OptionBuildUpInternal.model_validate(costing.build_up),
         warnings=costing.warnings,
+        transport=[
+            TransportChargeInternal.model_validate(c) for c in costing.transport
+        ],
+        transport_optional=[
+            TransportChargeInternal.model_validate(c)
+            for c in costing.transport_optional
+        ],
+        optional_transport_total=costing.optional_transport_total,
+        unpriced_transport=costing.unpriced_transport,
     )
 
 

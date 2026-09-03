@@ -33,6 +33,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import AppError, NotFoundError
+from app.core.vat import to_vat_inclusive
 from app.modules.accommodations.models import (
     Accommodation,
     AccommodationRate,
@@ -43,9 +44,21 @@ from app.modules.accommodations.models import (
 from app.modules.currency.fx import AdminExchangeRateProvider
 from app.modules.park_fees.models import ParkFee
 from app.modules.pricing.service import PricingConfigService
-from app.modules.quotes.cohorts import CostLine, Group, GroupPrice, price_group
+from app.modules.quotes import transport as transport_rules
+from app.modules.quotes.cohorts import (
+    CostLine,
+    Group,
+    GroupPrice,
+    multiplier,
+    price_group,
+)
 from app.modules.quotes.group import build_group, residence_ids
-from app.modules.quotes.models import Quote, QuoteOption, QuoteRejectedCandidate
+from app.modules.quotes.models import (
+    Quote,
+    QuoteOption,
+    QuoteRejectedCandidate,
+    QuoteTransportSegment,
+)
 from app.modules.quotes.options import (
     BuildUp,
     build_up,
@@ -61,6 +74,7 @@ from app.modules.quotes.options import (
     supplier_paid,
 )
 from app.modules.quotes.packages import Leg, nights_of
+from app.modules.transport.models import DestinationTransportMode, TransferRate
 
 # --------------------------------------------------------------------------- #
 # Results
@@ -78,6 +92,54 @@ class SupplementCharge:
     currency: str
     nights: int
     cost: Decimal
+
+
+@dataclass(frozen=True)
+class TransportCharge:
+    """One movement, costed (§3.10).
+
+    Both the tariff's own figure and the multiplied-out cost are kept. The
+    document has to be able to say "SGR economy, KES 1,500 per person, 25
+    people" rather than only the product, because a client who queries a fare
+    is querying the unit price and not the total.
+    """
+
+    sequence: int
+    kind: str
+    mode: str
+    label: str
+    basis: str
+    units: int
+    unit_amount: Decimal
+    currency: str
+    #: ``unit_amount`` multiplied out against the group, in ``currency``.
+    cost: Decimal
+    is_optional: bool = False
+    is_vvip: bool = False
+
+
+@dataclass
+class TransportCosting:
+    """A quote's transport, priced once and charged into every option.
+
+    Transport belongs to the *journey*, not to the hotel, so the same figure
+    enters every option's build-up. That is what keeps the comparison between
+    options a comparison of the beds, which is the only thing that differs.
+    """
+
+    #: Package transport in the presentation currency — what enters the price.
+    total: Decimal = Decimal(0)
+    #: Add-ons (VVIP and the rest), quoted separately and never in the package.
+    optional_total: Decimal = Decimal(0)
+    lines: list[CostLine] = field(default_factory=list)
+    charges: list[TransportCharge] = field(default_factory=list)
+    optional: list[TransportCharge] = field(default_factory=list)
+    #: Flights: named on the itinerary, never priced. See the rules module.
+    named: list[str] = field(default_factory=list)
+    #: Movements with no tariff on file. Blocking at readiness — a movement
+    #: priced at zero is the exact failure this stage exists to prevent.
+    unpriced: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -160,6 +222,20 @@ class OptionCosting:
     # client's confirmed requirement, and the only figures that are meaningful
     # for a mixed group, where ``build_up.per_person`` is necessarily NULL.
     cohort_prices: GroupPrice | None = None
+    # The journey (§3.10), identical across options because it is the same
+    # journey: what is in the package price, what is offered as an add-on, the
+    # flights that are named but not ours to sell, and the movements no tariff
+    # covers.
+    transport: list[TransportCharge] = field(default_factory=list)
+    transport_optional: list[TransportCharge] = field(default_factory=list)
+    transport_named: list[str] = field(default_factory=list)
+    unpriced_transport: list[str] = field(default_factory=list)
+    # The add-ons' cost, and what they sell for. Both, because an add-on offered
+    # at cost is an add-on sold at a loss: it carries the same contingency and
+    # margin as everything else in the package, and the client-facing figure is
+    # the second one.
+    optional_transport_total: Decimal = Decimal(0)
+    optional_transport_price: Decimal = Decimal(0)
     # Every leg of the package, in itinerary order. One entry for a
     # single-property option. The top-level ``room_type_*`` and ``meal_plan_*``
     # fields above describe the FIRST leg, because a document needs something to
@@ -246,6 +322,10 @@ class OptionPricingService:
             else cfg.contingency_pct
         )
         profit = quote.profit_pct if quote.profit_pct is not None else cfg.profit_pct
+        # The journey is priced once, not once per option: it is the same
+        # journey whichever hotel is chosen, and one lookup per quote also means
+        # every option is charged transport at the same fares (§3.10).
+        transport = await self._transport(quote, group=group)
 
         result = OptionPricingResult()
         for option in sorted(quote.options, key=lambda o: o.sort_order):
@@ -258,6 +338,7 @@ class OptionPricingService:
                 contingency_pct=contingency,
                 profit_pct=profit,
                 rounding_step=cfg.per_person_rounding,
+                transport=transport,
                 into=result,
             )
         return result
@@ -585,6 +666,7 @@ class OptionPricingService:
         contingency_pct: Decimal,
         profit_pct: Decimal,
         rounding_step: Decimal,
+        transport: TransportCosting,
         into: OptionPricingResult,
     ) -> None:
         """Price a curated package — one property per leg (§3.9).
@@ -628,6 +710,10 @@ class OptionPricingService:
         for one in costed:
             for label, amount in one.components.items():
                 components[label] = components.get(label, Decimal(0)) + amount
+        # The journey enters every option identically, so what the client
+        # compares is the beds — the only thing that actually differs (§3.10).
+        if transport.total:
+            components["transport"] = transport.total
 
         # The room cost split by residency, merged across legs, so each residency
         # is still priced off its own sheets in its own currency (§3.8).
@@ -646,6 +732,7 @@ class OptionPricingService:
             for one in costed
             for note in one.warnings
         ]
+        warnings.extend(transport.warnings)
         paid_total = sum((one.room.paid_total for one in costed), Decimal(0))
         costed_total = sum((one.room.costed_total for one in costed), Decimal(0))
 
@@ -662,13 +749,29 @@ class OptionPricingService:
             # group got one per-person figure covering two currencies.
             uniform_group=group.is_uniform,
         )
+        # An add-on is priced through the same build-up as the package, so a
+        # VVIP upgrade offered separately is still offered with contingency and
+        # margin on it. No agent cover fee: that is charged once on the quote,
+        # not again on each extra.
+        add_on = (
+            build_up(
+                components={"transport": transport.optional_total},
+                pax=group.pax,
+                contingency_pct=contingency_pct,
+                profit_pct=profit_pct,
+                rounding_step=rounding_step,
+                uniform_group=group.is_uniform,
+            ).group_total
+            if transport.optional_total
+            else Decimal(0)
+        )
         # ``best`` is handed the merged per-residency split, so a package's
         # accommodation lines reach the right cohorts across every leg.
         merged = replace(lead.room, costed_by_residence=merged_by_residence)
         cohort_prices = await self._per_cohort(
             quote,
             merged,
-            park_lines=park_lines,
+            direct_lines=park_lines + transport.lines,
             shared=components,
             capacity_of=lead.room.room_type_id,
             group=group,
@@ -714,6 +817,12 @@ class OptionPricingService:
                 ),
                 warnings=warnings,
                 cohort_prices=cohort_prices,
+                transport=transport.charges,
+                transport_optional=transport.optional,
+                transport_named=transport.named,
+                unpriced_transport=transport.unpriced,
+                optional_transport_total=transport.optional_total,
+                optional_transport_price=add_on,
                 legs=costed,
             )
         )
@@ -921,7 +1030,7 @@ class OptionPricingService:
         quote: Quote,
         best: RoomTypeQuote,
         *,
-        park_lines: list[CostLine],
+        direct_lines: list[CostLine],
         shared: dict[str, Decimal],
         capacity_of: uuid.UUID,
         group: Group,
@@ -937,6 +1046,11 @@ class OptionPricingService:
         shillings, non-residents in dollars, children apart from adults, and a
         group total for the whole booking.
 
+        ``direct_lines`` are the costs that already know who bears them and in
+        which currency — park fees, and the transport tariffs (§3.10) — so they
+        are attributed as they stand rather than re-derived from a presentation
+        currency total.
+
         Three shapes of cost line, and which cohorts each reaches is the whole
         design:
 
@@ -945,6 +1059,8 @@ class OptionPricingService:
           sleep in the same rooms off the same sheet.
         * **Park fees** name a residency *and* a type, because a resident child
           pays the resident child rate and nobody else shares that line.
+        * **Transport** names neither and is already multiplied out, because a
+          seat costs the same whoever is in it.
         * **Supplements, chef and food** name neither, so they split per head
           across the whole group. A chef costs the same whoever eats.
 
@@ -970,11 +1086,13 @@ class OptionPricingService:
             for residence, buckets in best.costed_by_residence.items()
             for currency, amount in buckets.items()
         ]
-        lines.extend(park_lines)
+        lines.extend(direct_lines)
         # Everything the whole group shares. Already in the presentation
-        # currency, since that is how the components dict is built.
+        # currency, since that is how the components dict is built. The labels
+        # skipped here are the ones already above as direct lines — adding the
+        # component total as well would charge them twice.
         for label, amount in shared.items():
-            if label in {"accommodation", "park_fees"} or amount == 0:
+            if label in {"accommodation", "park_fees", "transport"} or amount == 0:
                 continue
             lines.append(
                 CostLine(
@@ -1163,6 +1281,237 @@ class OptionPricingService:
                 f"the missing schedule before issuing."
             )
         return await self._to_presentation(quote, per_currency), warnings, lines
+
+    # -- transport ----------------------------------------------------------- #
+
+    @staticmethod
+    def _segment_label(segment: QuoteTransportSegment) -> str:
+        parts = [
+            "Transfer" if segment.kind == transport_rules.TRANSFER else "Line haul",
+            segment.mode.upper(),
+        ]
+        if segment.travel_class:
+            parts.append(segment.travel_class.title())
+        label = " · ".join(parts)
+        return f"{segment.description} ({label})" if segment.description else label
+
+    async def _transport(self, quote: Quote, *, group: Group) -> TransportCosting:
+        """Price the journey (§3.8, stage 3.10).
+
+        Transport is charged **into every option** rather than beside them,
+        because it is the same journey whichever hotel the client picks: putting
+        it outside the options would make the cheapest bed look like the
+        cheapest trip, and the client compares trips.
+
+        Three things this will not do.
+
+        It will not **invent a fare**. A movement with no tariff on file is
+        recorded as unpriced and blocks at readiness rather than being charged
+        at zero, because a zero is indistinguishable on a document from a leg
+        the client is genuinely not being charged for.
+
+        It will not **price a flight**. Air is unpriceable, not merely unpriced
+        (see the rules module), so a flight segment is named for the itinerary
+        and its fare becomes an exclusion.
+
+        It will not price the whole quote at **one instant**. Each movement is
+        priced at the tariff effective on its own ``travel_date`` — the
+        arrival date where none is given — for the same reason accommodation is
+        selected per night: fares move, and a return rail leg after a revision
+        is a different price from the outbound one.
+
+        Optional segments are costed but held apart: a VVIP upgrade is an
+        add-on, and folding it into the package would change what the options
+        are being compared on.
+        """
+        out = TransportCosting()
+        segments = sorted(quote.transport_segments, key=lambda s: s.sequence)
+        if not segments:
+            return out
+
+        per_currency: dict[str, Decimal] = {}
+        optional_currency: dict[str, Decimal] = {}
+        for segment in segments:
+            label = self._segment_label(segment)
+            if segment.mode in transport_rules.NAMED_ONLY_MODES:
+                out.named.append(label)
+                continue
+            if (
+                segment.mode not in transport_rules.PRICED_MODES
+                or segment.kind not in transport_rules.KINDS
+            ):
+                # The validation rules already refuse this; pricing's job is
+                # only not to put a number against it.
+                out.unpriced.append(label)
+                continue
+            # A segment run on our own or a hired vehicle is costed by the
+            # Stage 2 fleet model (km, fuel, driver) off ``quote_transport``,
+            # not from a transfer tariff, so it is not charged twice here.
+            if segment.vehicle_id is not None:
+                continue
+
+            on = segment.travel_date or quote.arrival_date
+            if not (quote.arrival_date <= on <= quote.departure_date):
+                out.warnings.append(
+                    f"{label} travels on {on}, which is outside the quote's "
+                    f"{quote.arrival_date} to {quote.departure_date} window, so "
+                    f"it is priced at that date's tariff. Check the date."
+                )
+            tariff = await self._tariff_for(segment, on=on)
+            if tariff is None:
+                out.unpriced.append(label)
+                out.warnings.append(
+                    f"{label}: no tariff on file for this destination and "
+                    f"vehicle on {on}, so the movement carries no price. Load "
+                    f"the fare before issuing — a zero here reads on the "
+                    f"document as a leg the client is not being charged for."
+                )
+                continue
+
+            amount, currency, basis, tariff_label = tariff
+            if (
+                segment.kind == transport_rules.TRANSFER
+                and segment.description
+                and tariff_label
+                and tariff_label.strip().casefold()
+                != segment.description.strip().casefold()
+            ):
+                # A transfer tariff is keyed on its route, and one route is not
+                # another: town-to-terminus is not terminus-to-hotel. Priced off
+                # the nearest row we have rather than left at zero, but said out
+                # loud, because a plausible figure for the wrong drive is the
+                # kind of error nobody goes looking for.
+                out.warnings.append(
+                    f"{label} is priced off the {tariff_label!r} tariff, which "
+                    f"is not the route named. Load a rate for this leg, or "
+                    f"rename it to the tariff it is actually charged at."
+                )
+            cost = amount * multiplier(
+                basis, pax=group.pax, nights=0, days=0, rooms=0, units=segment.units
+            )
+            charge = TransportCharge(
+                sequence=segment.sequence,
+                kind=segment.kind,
+                mode=segment.mode,
+                label=segment.description or tariff_label or label,
+                basis=basis,
+                units=segment.units,
+                unit_amount=amount,
+                currency=currency,
+                cost=cost,
+                is_optional=segment.is_optional,
+                is_vvip=segment.is_vvip,
+            )
+            if segment.is_optional:
+                out.optional.append(charge)
+                optional_currency[currency] = (
+                    optional_currency.get(currency, Decimal(0)) + cost
+                )
+                continue
+            out.charges.append(charge)
+            per_currency[currency] = per_currency.get(currency, Decimal(0)) + cost
+            # Already multiplied out, so it travels as a group total — the same
+            # shape as an accommodation subtotal. Nobody's residency or age
+            # changes a seat's price, so the line names neither and is split
+            # per head: a seat costs the same whoever is in it.
+            out.lines.append(
+                CostLine(
+                    label="transport",
+                    amount=cost,
+                    currency=currency,
+                    basis="per_group",
+                )
+            )
+
+        out.total = await self._to_presentation(quote, per_currency)
+        out.optional_total = await self._to_presentation(quote, optional_currency)
+        return out
+
+    async def _tariff_for(
+        self, segment: QuoteTransportSegment, *, on: date
+    ) -> tuple[Decimal, str, str, str] | None:
+        """The tariff for one movement: ``(amount, currency, basis, label)``.
+
+        VAT-normalised here rather than at write time. Every other rate in the
+        system is normalised at ingestion (:mod:`app.core.vat`), but these two
+        tables are entered directly and carry the flag, so the gross-up has to
+        happen on the way out — once, in one place, which is what keeps it from
+        being a rule five call sites remember.
+        """
+        if segment.destination_id is None:
+            return None
+
+        if segment.kind == transport_rules.TRANSFER:
+            rows = list(
+                (
+                    await self.db.execute(
+                        select(TransferRate).where(
+                            TransferRate.destination_id == segment.destination_id,
+                            TransferRate.vehicle_type == (segment.vehicle_type or ""),
+                            TransferRate.is_active.is_(True),
+                            TransferRate.effective_from <= on,
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            live = [r for r in rows if r.effective_to is None or r.effective_to >= on]
+            if not live:
+                return None
+            # A route label narrows the tariff — "Nairobi CBD → SGR terminal" is
+            # not the same drive as "terminus to hotel" — so an exact match wins
+            # over the destination's general rate, which wins over another
+            # named route we were not asked for.
+            wanted = (segment.description or "").strip().casefold()
+            best = max(
+                live,
+                key=lambda r: (
+                    2 if wanted and r.route_label.strip().casefold() == wanted else
+                    1 if not r.route_label.strip() else 0,
+                    r.effective_from,
+                ),
+            )
+            return (
+                to_vat_inclusive(
+                    best.price_per_leg,
+                    vat_inclusive=best.vat_inclusive,
+                    vat_pct=best.vat_pct,
+                ),
+                best.currency.upper(),
+                transport_rules.line_basis("per_leg"),
+                best.route_label,
+            )
+
+        fares = list(
+            (
+                await self.db.execute(
+                    select(DestinationTransportMode).where(
+                        DestinationTransportMode.destination_id
+                        == segment.destination_id,
+                        DestinationTransportMode.mode == segment.mode,
+                        DestinationTransportMode.travel_class
+                        == (segment.travel_class or ""),
+                        DestinationTransportMode.is_active.is_(True),
+                        DestinationTransportMode.effective_from <= on,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        current = [f for f in fares if f.effective_to is None or f.effective_to >= on]
+        if not current:
+            return None
+        fare = max(current, key=lambda f: f.effective_from)
+        return (
+            to_vat_inclusive(
+                fare.price, vat_inclusive=fare.vat_inclusive, vat_pct=fare.vat_pct
+            ),
+            fare.currency.upper(),
+            transport_rules.line_basis(fare.cost_basis),
+            fare.label or "",
+        )
 
     async def _supplements(
         self,

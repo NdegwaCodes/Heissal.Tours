@@ -36,9 +36,14 @@ dataclass would only be a second thing to keep in step.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from app.modules.quotes.packages import Problem
+
+if TYPE_CHECKING:  # pragma: no cover - typing only, keeps this module ORM-free
+    from app.modules.quotes.models import QuoteTransportSegment
 
 LINE_HAUL = "line_haul"
 TRANSFER = "transfer"
@@ -68,6 +73,7 @@ UNKNOWN_KIND = "transport_unknown_kind"
 UNKNOWN_MODE = "transport_unknown_mode"
 FLIGHT_NAMED = "transport_flight_named_not_priced"
 RAIL_WITHOUT_TRANSFERS = "transport_rail_without_transfers"
+NO_DESTINATION = "transport_no_destination"
 MISSING_MOVEMENTS = "transport_movements_short"
 VVIP_NOT_OPTIONAL = "transport_vvip_not_optional"
 
@@ -85,6 +91,10 @@ class Segment:
     kind: str
     mode: str
     travel_class: str = ""
+    #: Which destination's tariff table this movement prices against. Every
+    #: fare is keyed on a destination — a Coaster transfer costs differently in
+    #: Diani than in Nanyuki (§3.8) — so a movement without one is unpriceable.
+    destination: str | None = None
     vehicle_type: str | None = None
     #: True when the segment runs on our own or a hired vehicle, which is
     #: costed per vehicle per day by the Stage 2 fleet model.
@@ -93,6 +103,37 @@ class Segment:
     is_optional: bool = False
     is_vvip: bool = False
     label: str = ""
+
+
+def segments_of(rows: Iterable[QuoteTransportSegment]) -> list[Segment]:
+    """Project ``quote_transport_segments`` rows onto the rule vocabulary.
+
+    One conversion, used by pricing, by creation and by the readiness check.
+    Three call sites each mapping the row themselves is three chances for one of
+    them to read ``is_optional`` and forget ``vehicle_id`` — and the check that
+    then disagrees with pricing is the worst possible outcome, because it makes
+    a quote either unissuable for no visible reason or issuable when it is not.
+
+    Reads columns only, never a relationship, so it stays free of I/O.
+    """
+    return _order(
+        [
+            Segment(
+                sequence=row.sequence,
+                kind=row.kind,
+                mode=row.mode,
+                travel_class=row.travel_class or "",
+                destination=str(row.destination_id) if row.destination_id else None,
+                vehicle_type=row.vehicle_type,
+                has_vehicle=row.vehicle_id is not None,
+                units=row.units,
+                is_optional=row.is_optional,
+                is_vvip=row.is_vvip,
+                label=row.description or "",
+            )
+            for row in rows
+        ]
+    )
 
 
 def line_basis(cost_basis: str) -> str:
@@ -185,6 +226,28 @@ def check(segments: list[Segment], *, legs: int = 1) -> list[Problem]:
                 blocking=False,
             )
         )
+
+    for segment in ordered:
+        # A fare is keyed on a destination, so a movement without one cannot be
+        # priced at all — and a movement that cannot be priced is the exact
+        # failure this stage exists to prevent, so it is refused rather than
+        # left to show up as a zero. A segment on our own fleet is exempt: it is
+        # costed on km and fuel, not from a destination tariff.
+        if (
+            segment.mode in PRICED_MODES
+            and not segment.has_vehicle
+            and not segment.destination
+        ):
+            problems.append(
+                Problem(
+                    NO_DESTINATION,
+                    f"Segment {segment.sequence} names no destination, and every "
+                    f"fare is keyed on one — the same vehicle costs differently "
+                    f"in different places — so there is no tariff to price it "
+                    f"from.",
+                    sequence=segment.sequence,
+                )
+            )
 
     rail = [s for s in ordered if s.kind == LINE_HAUL and s.mode == "rail"]
     transfers = [s for s in ordered if s.kind == TRANSFER and s.mode in PRICED_MODES]

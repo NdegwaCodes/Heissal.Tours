@@ -58,6 +58,8 @@ from app.modules.quotes.schemas import (
     RejectedCandidateIn,
 )
 from app.modules.quotes.service import QuoteService
+from app.modules.quotes.transport import check as check_transport
+from app.modules.quotes.transport import segments_of
 
 BLOCKING = "blocking"
 ADVISORY = "advisory"
@@ -365,6 +367,7 @@ class QuoteAssemblyService:
         )
 
         problems.extend(self._package_problems(quote))
+        problems.extend(self._transport_problems(quote, priced))
 
         return Readiness(
             is_ready=not any(p.severity == BLOCKING for p in problems),
@@ -409,6 +412,57 @@ class QuoteAssemblyService:
                         f"Option {option.sort_order}: {found.message}",
                     )
                 )
+        return out
+
+    @staticmethod
+    def _transport_problems(
+        quote: Quote, priced: OptionPricingResult
+    ) -> list[Problem]:
+        """Grade the journey (§3.10).
+
+        Two independent things go wrong with transport, and only one of them is
+        visible in the rules.
+
+        The **shape** of the journey — a rail leg with no transfers, a mode we
+        cannot sell — is checked from the segments alone, against the longest
+        package on the quote, because that is the itinerary the movements have
+        to cover.
+
+        A **missing tariff** is only discoverable by trying to price it, and it
+        blocks: a movement priced at zero is indistinguishable on a finished
+        document from a leg the client is genuinely not being charged for, and
+        it is the whole cost of that leg missing from every option.
+        """
+        out: list[Problem] = []
+        legs = max(
+            [len(option.legs) for option in quote.options if option.legs] or [1]
+        )
+        for found in check_transport(segments_of(quote.transport_segments), legs=legs):
+            out.append(
+                Problem(
+                    BLOCKING if found.blocking else ADVISORY,
+                    found.code,
+                    found.message,
+                )
+            )
+        # Identical across options — it is the same journey — so it is reported
+        # once rather than once per hotel.
+        unpriced: list[str] = []
+        for option in priced.options:
+            for movement in option.unpriced_transport:
+                if movement not in unpriced:
+                    unpriced.append(movement)
+        for movement in unpriced:
+            out.append(
+                Problem(
+                    BLOCKING,
+                    "unpriced_transport",
+                    f"{movement} has no tariff on file, so every option is "
+                    f"under-priced by the whole cost of that movement. Load the "
+                    f"fare, or take the segment off the quote and say on the "
+                    f"document that the client arranges it.",
+                )
+            )
         return out
 
     @staticmethod

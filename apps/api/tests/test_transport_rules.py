@@ -11,12 +11,18 @@ import pytest
 
 from app.modules.quotes import transport as T
 
+#: Every fare is keyed on a destination, so the helpers name one; the rule that
+#: a movement without one is unpriceable is checked on its own below.
+WHERE = "diani"
+
 
 def _rail(sequence: int = 1, **kw) -> T.Segment:
+    kw.setdefault("destination", WHERE)
     return T.Segment(sequence=sequence, kind=T.LINE_HAUL, mode="rail", **kw)
 
 
 def _transfer(sequence: int, **kw) -> T.Segment:
+    kw.setdefault("destination", WHERE)
     return T.Segment(sequence=sequence, kind=T.TRANSFER, mode="road", **kw)
 
 
@@ -39,6 +45,35 @@ def test_a_single_property_trip_still_needs_two_movements():
 
 
 # -- flights ----------------------------------------------------------------- #
+
+
+def test_a_movement_without_a_destination_blocks():
+    """There is no tariff to price it from: every fare is keyed on a place."""
+    problems = T.check([_transfer(1, destination=None)], legs=1)
+    fault = next(p for p in problems if p.code == T.NO_DESTINATION)
+    assert fault.blocking is True
+    assert fault.sequence == 1
+
+
+def test_a_hired_vehicle_needs_no_destination():
+    """It is costed on km and fuel, not from a destination's tariff table."""
+    problems = T.check(
+        [
+            T.Segment(
+                sequence=1, kind=T.LINE_HAUL, mode="road", has_vehicle=True
+            )
+        ],
+        legs=1,
+    )
+    assert T.NO_DESTINATION not in _codes(problems)
+
+
+def test_a_flight_needs_no_destination_because_it_is_never_priced():
+    problems = T.check(
+        [T.Segment(sequence=1, kind=T.LINE_HAUL, mode="air"), _transfer(2), _transfer(3)],
+        legs=1,
+    )
+    assert T.NO_DESTINATION not in _codes(problems)
 
 
 def test_a_flight_is_never_priceable():

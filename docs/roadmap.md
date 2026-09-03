@@ -175,8 +175,28 @@ backend-only and the client sees per-person and group totals only.
     note, not a fault; legs order by `sequence` and never by date
   - Dropped `uq_quote_option_accommodation` — two packages may share a property and differ on
     a later leg. Replaced by a service check over whole leg sequences (see decision log)
-- ☐ 3.10 Transport pricing — per transition plus arrival and departure, flights named and
-  unpriced, airport transfers charged, transfers validated per line-haul
+- ☑ 3.10 Transport pricing — `app/modules/quotes/transport.py` (the pure rules, 34 tests) plus
+  `OptionPricingService._transport` (17 DB tests). Migration `d5a3e81c60b9` adds
+  `quote_transport_segments.travel_date`; `transport_segments` is now accepted on quote
+  creation, and the priced journey reaches each option as a `transport` component
+  - **Charged into every option, not beside them** — it is the same journey whichever hotel is
+    picked, priced once per quote. Outside the options the cheapest bed would look like the
+    cheapest trip
+  - **A movement with no tariff blocks** rather than pricing at zero, which on a document is
+    indistinguishable from a leg the client is not being charged for. A segment naming no
+    destination is refused at creation: every fare is keyed on one
+  - **A journey is `legs + 1` movements** — one per transition plus both ends — but a shortfall
+    is advice, since a client arranging their own airport run is a real case. A hired-vehicle
+    segment satisfies it outright and is not charged a transfer tariff, or the same drive
+    would be billed twice
+  - **Rail drags four transfers with it** (two per line-haul): a train leaves from a terminus
+    nobody sleeps at. Blocking, at creation and again at readiness
+  - **Flights are unpriceable, not unpriced** — named on the itinerary, reported so the fare
+    reaches the exclusions, never in the money. The name is client-facing; the tariffs are not
+  - Each movement prices at its own `travel_date`, so a return leg after a fare revision is
+    not charged the outbound fare. VAT normalised on the way out for these two tables
+  - VVIP is quoted apart from the package but through the same build-up: an add-on offered at
+    cost is sold at a loss
 - ☐ 3.11 The curated package x transport table
 - ☐ 3.12 Internal costing worksheet (the mirror of the client document, every line with its
   basis, multiplier and source document) + the exclusions list (travel insurance and the rest)
