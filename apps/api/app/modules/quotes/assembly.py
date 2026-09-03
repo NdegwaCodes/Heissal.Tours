@@ -39,6 +39,7 @@ from app.modules.pricing.service import PricingConfigService
 from app.modules.quotes.models import (
     Quote,
     QuoteOption,
+    QuoteOptionLeg,
     QuoteRejectedCandidate,
     QuoteVersion,
     QuoteVersionOption,
@@ -49,11 +50,14 @@ from app.modules.quotes.option_pricing import (
     OptionPricingService,
 )
 from app.modules.quotes.options import needs_chef
+from app.modules.quotes.packages import Leg
+from app.modules.quotes.packages import check as check_package
 from app.modules.quotes.schemas import (
     QuoteOptionIn,
     QuoteOptionUpdate,
     RejectedCandidateIn,
 )
+from app.modules.quotes.service import QuoteService
 
 BLOCKING = "blocking"
 ADVISORY = "advisory"
@@ -95,11 +99,33 @@ class QuoteAssemblyService:
         accommodation = await self.db.get(Accommodation, payload.accommodation_id)
         if accommodation is None:
             raise NotFoundError("Accommodation not found.")
-        if any(o.accommodation_id == payload.accommodation_id for o in quote.options):
+        # Only single-property options collide on the property alone. Two
+        # curated packages may share a hotel and differ on a later leg (§3.9),
+        # so for those the thing that has to be distinct is the leg sequence.
+        if not payload.legs and any(
+            o.accommodation_id == payload.accommodation_id and not o.legs
+            for o in quote.options
+        ):
             raise AppError(
                 f"{accommodation.name} is already an option on this quote. A client "
                 f"choosing between two entries for the same property is a mistake, "
                 f"not a choice."
+            )
+        if payload.legs:
+            existing = {
+                tuple(
+                    (leg.sequence, leg.accommodation_id, leg.check_in, leg.check_out)
+                    for leg in sorted(o.legs, key=lambda entry: entry.sequence)
+                )
+                for o in quote.options
+                if o.legs
+            }
+            QuoteService(self.db)._check_package(
+                payload,
+                index=len(quote.options) + 1,
+                arrival=quote.arrival_date,
+                departure=quote.departure_date,
+                seen=existing,
             )
         highest = max((o.sort_order for o in quote.options), default=0)
         option = QuoteOption(
@@ -113,12 +139,28 @@ class QuoteAssemblyService:
             is_comparable=payload.is_comparable,
             notes=payload.notes,
         )
+        for entry in payload.legs:
+            option.legs.append(
+                QuoteOptionLeg(
+                    sequence=entry.sequence,
+                    destination_id=entry.destination_id,
+                    accommodation_id=entry.accommodation_id,
+                    requested_meal_plan_id=entry.requested_meal_plan_id,
+                    check_in=entry.check_in,
+                    check_out=entry.check_out,
+                )
+            )
         self.db.add(option)
         await self.db.flush()
         if payload.is_recommended:
             await self._make_sole_recommendation(quote.id, option.id)
         await self.db.commit()
-        return option
+        # Re-selected rather than returned directly: the commit expires the
+        # instance, and serialising `legs` off an expired object attempts IO
+        # inside the response encoder, where there is no greenlet to do it.
+        return (
+            await self.db.execute(select(QuoteOption).where(QuoteOption.id == option.id))
+        ).scalar_one()
 
     async def update_option(
         self, quote_id: uuid.UUID, option_id: uuid.UUID, payload: QuoteOptionUpdate
@@ -322,12 +364,52 @@ class QuoteAssemblyService:
             )
         )
 
+        problems.extend(self._package_problems(quote))
+
         return Readiness(
             is_ready=not any(p.severity == BLOCKING for p in problems),
             catered_options=len(catered),
             self_catering_options=len(self_catering),
             problems=problems,
         )
+
+    @staticmethod
+    def _package_problems(quote: Quote) -> list[Problem]:
+        """Re-check every package's legs against the quote's own dates (§3.9).
+
+        Creation already refused an incoherent package, so this is not the first
+        line of defence — it is the one that survives editing. A quote's arrival
+        or departure can move after the packages are built, and when it does a
+        set of legs that was contiguous and complete silently stops covering the
+        trip. Nothing about the priced figures shows it: the per-person number is
+        as plausible as ever whether or not the client has a bed on the last
+        night.
+        """
+        out: list[Problem] = []
+        for option in sorted(quote.options, key=lambda o: o.sort_order):
+            if not option.legs:
+                continue
+            for found in check_package(
+                [
+                    Leg(
+                        sequence=leg.sequence,
+                        destination=str(leg.destination_id),
+                        check_in=leg.check_in,
+                        check_out=leg.check_out,
+                    )
+                    for leg in option.legs
+                ],
+                arrival=quote.arrival_date,
+                departure=quote.departure_date,
+            ):
+                out.append(
+                    Problem(
+                        BLOCKING if found.blocking else ADVISORY,
+                        found.code,
+                        f"Option {option.sort_order}: {found.message}",
+                    )
+                )
+        return out
 
     @staticmethod
     def _count_problems(

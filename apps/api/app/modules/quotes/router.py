@@ -22,6 +22,8 @@ from app.modules.quotes.schemas import (
     OptionBuildUpInternal,
     OptionPricingClientResult,
     OptionPricingInternalResult,
+    PricedLegInternalRead,
+    PricedLegRead,
     PricingLineClient,
     PricingResultClient,
     PricingResultInternal,
@@ -192,6 +194,17 @@ def _client_option(costing: OptionCosting) -> QuoteOptionClientRead:
                 costing.cohort_prices.cohorts if costing.cohort_prices else ()
             )
         ],
+        legs=[
+            PricedLegRead(
+                sequence=one.sequence,
+                accommodation_name=one.accommodation_name,
+                room_type_name=one.room.room_type_name,
+                meal_plan_code=one.plan_code,
+                rooms_required=one.room.rooms,
+                nights=one.nights,
+            )
+            for one in costing.legs
+        ],
         conversions=(
             dict(costing.cohort_prices.conversions) if costing.cohort_prices else {}
         ),
@@ -200,7 +213,9 @@ def _client_option(costing: OptionCosting) -> QuoteOptionClientRead:
 
 def _internal_option(costing: OptionCosting) -> QuoteOptionInternalRead:
     return QuoteOptionInternalRead(
-        **_client_option(costing).model_dump(),
+        # `legs` is replaced below with the internal rows, which carry the
+        # fallback reason the client schema deliberately omits.
+        **_client_option(costing).model_dump(exclude={"legs"}),
         room_type_id=costing.room_type_id,
         meal_plan_id=costing.meal_plan_id,
         meal_plan_name=costing.meal_plan_name,
@@ -209,6 +224,20 @@ def _internal_option(costing: OptionCosting) -> QuoteOptionInternalRead:
         retained_discount=costing.retained_discount,
         supplements=[
             SupplementChargeInternal.model_validate(s) for s in costing.supplements
+        ],
+        legs=[
+            PricedLegInternalRead(
+                sequence=one.sequence,
+                accommodation_name=one.accommodation_name,
+                room_type_name=one.room.room_type_name,
+                meal_plan_code=one.plan_code,
+                rooms_required=one.room.rooms,
+                nights=one.nights,
+                meal_plan_fallback_from=(
+                    one.requested_plan if one.is_fallback else None
+                ),
+            )
+            for one in costing.legs
         ],
         build_up=OptionBuildUpInternal.model_validate(costing.build_up),
         warnings=costing.warnings,

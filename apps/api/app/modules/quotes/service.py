@@ -26,9 +26,13 @@ from app.modules.quotes.models import (
     QuoteCounter,
     QuoteLeg,
     QuoteOption,
+    QuoteOptionLeg,
     QuoteTransport,
     QuoteTraveller,
 )
+from app.modules.quotes.packages import Leg
+from app.modules.quotes.packages import blocking as blocking_problems
+from app.modules.quotes.packages import check as check_package
 from app.modules.quotes.schemas import QuoteCreate
 from app.modules.residence.models import ResidenceCategory
 
@@ -145,21 +149,39 @@ class QuoteService:
                     )
                 )
             quote.legs.append(ql)
+        signatures: set[tuple] = set()
         for index, opt in enumerate(payload.options, start=1):
-            quote.options.append(
-                QuoteOption(
-                    accommodation_id=opt.accommodation_id,
-                    is_recommended=opt.is_recommended,
-                    # Ties keep the order the agent listed them in rather than
-                    # falling back to insertion order, which is not stable.
-                    sort_order=opt.sort_order or index,
-                    agent_cover_fee=opt.agent_cover_fee,
-                    chef_fee_per_meal=opt.chef_fee_per_meal,
-                    manual_meal_cost=opt.manual_meal_cost,
-                    is_comparable=opt.is_comparable,
-                    notes=opt.notes,
-                )
+            self._check_package(
+                opt,
+                index=index,
+                arrival=payload.arrival_date,
+                departure=payload.departure_date,
+                seen=signatures,
             )
+            option = QuoteOption(
+                accommodation_id=opt.accommodation_id,
+                is_recommended=opt.is_recommended,
+                # Ties keep the order the agent listed them in rather than
+                # falling back to insertion order, which is not stable.
+                sort_order=opt.sort_order or index,
+                agent_cover_fee=opt.agent_cover_fee,
+                chef_fee_per_meal=opt.chef_fee_per_meal,
+                manual_meal_cost=opt.manual_meal_cost,
+                is_comparable=opt.is_comparable,
+                notes=opt.notes,
+            )
+            for entry in opt.legs:
+                option.legs.append(
+                    QuoteOptionLeg(
+                        sequence=entry.sequence,
+                        destination_id=entry.destination_id,
+                        accommodation_id=entry.accommodation_id,
+                        requested_meal_plan_id=entry.requested_meal_plan_id,
+                        check_in=entry.check_in,
+                        check_out=entry.check_out,
+                    )
+                )
+            quote.options.append(option)
         for tr in payload.transport:
             quote.transport.append(
                 QuoteTransport(
@@ -181,6 +203,65 @@ class QuoteService:
             ) from exc
 
         return await self._load(quote.id)
+
+    def _check_package(
+        self,
+        option,
+        *,
+        index: int,
+        arrival: date,
+        departure: date,
+        seen: set[tuple],
+    ) -> None:
+        """Refuse a package that is not a trip somebody could take (§3.9).
+
+        Contiguity is checked **at creation**, not only at readiness, because a
+        stored package with a night missing is a quote that prices cleanly and
+        is wrong: the per-person figure looks entirely normal whether or not the
+        client has a bed on the third night. Readiness re-checks it — an agent
+        can edit dates afterwards — but there is no reason to accept it in the
+        first place.
+
+        Minimum stay is deliberately *not* checked here. It depends on the rates
+        on file, which is pricing's job, so it is enforced at readiness where the
+        rates have been read.
+        """
+        if not option.legs:
+            return
+
+        problems = check_package(
+            [
+                Leg(
+                    sequence=entry.sequence,
+                    destination=str(entry.destination_id),
+                    check_in=entry.check_in,
+                    check_out=entry.check_out,
+                )
+                for entry in option.legs
+            ],
+            arrival=arrival,
+            departure=departure,
+        )
+        if fatal := blocking_problems(problems):
+            raise AppError(
+                f"Option {index} is not a valid package: "
+                + " ".join(f"({p.code}) {p.message}" for p in fatal)
+            )
+
+        # What the dropped uniqueness constraint used to mean, expressed over the
+        # thing that actually has to be distinct. Two packages may share a
+        # property — Nairobi then Mara against Nairobi then Amboseli — but two
+        # identical leg sequences are the same offer listed twice.
+        signature = tuple(
+            (entry.sequence, entry.accommodation_id, entry.check_in, entry.check_out)
+            for entry in sorted(option.legs, key=lambda e: e.sequence)
+        )
+        if signature in seen:
+            raise AppError(
+                f"Option {index} repeats a package already on this quote — the "
+                "same properties on the same dates. Offer it once."
+            )
+        seen.add(signature)
 
     async def _attach_cohorts(self, quote: Quote, rows: list) -> None:
         """Validate and attach the group vector (§3.8).

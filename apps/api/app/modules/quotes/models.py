@@ -438,9 +438,13 @@ class QuoteOption(UUIDPKMixin, TimestampMixin, Base):
     """One accommodation alternative offered within a quote."""
 
     __tablename__ = "quote_options"
-    __table_args__ = (
-        UniqueConstraint("quote_id", "accommodation_id", name="uq_quote_option_accommodation"),
-    )
+    # No uniqueness on (quote_id, accommodation_id) any more. It meant "do not
+    # offer the same hotel twice", which stopped being expressible as a column
+    # pair once an option became a package (§3.9): two curated packages can
+    # legitimately share a property on one leg and differ on another — Nairobi
+    # then Mara, against Nairobi then Amboseli. The intent survives as a service
+    # check comparing whole leg sequences, which is the thing that actually has
+    # to be distinct.
 
     quote_id: Mapped[uuid.UUID] = mapped_column(
         PGUUID(as_uuid=True), ForeignKey("quotes.id", ondelete="CASCADE"), index=True,
@@ -482,6 +486,86 @@ class QuoteOption(UUIDPKMixin, TimestampMixin, Base):
 
     quote: Mapped[Quote] = relationship(
         "Quote", back_populates="options", foreign_keys=[quote_id]
+    )
+    legs: Mapped[list[QuoteOptionLeg]] = relationship(
+        "QuoteOptionLeg",
+        back_populates="option",
+        lazy="selectin",
+        cascade="all, delete-orphan",
+        order_by="QuoteOptionLeg.sequence",
+        foreign_keys="QuoteOptionLeg.quote_option_id",
+    )
+
+
+class QuoteOptionLeg(UUIDPKMixin, TimestampMixin, Base):
+    """One stay within a curated multi-destination package (§3.9).
+
+    An option stopped being "one hotel" when the client asked for **2 or 3
+    destinations in a single 7–30 day trip**. A package is an ordered set of
+    these: destination, property, the plan the agent asked for, and a date range.
+
+    ``QuoteOption.accommodation_id`` stays as the single-leg shorthand — most
+    quotes are one hotel — and these rows take precedence when present, the same
+    precedence the group vector uses over ``pax_count``. So there is one place
+    that decides what a package is, rather than two that can disagree.
+
+    Dates, not a night count. The two carry the same information only while
+    nothing is edited; the moment an agent moves the middle leg by a day, dates
+    say what happened and counts do not. Contiguity is checked in
+    :mod:`app.modules.quotes.packages` and is **blocking**: a gap is a night with
+    no bed and an overlap is a night paid for twice, and neither is visible on a
+    finished document.
+    """
+
+    __tablename__ = "quote_option_legs"
+    __table_args__ = (
+        UniqueConstraint("quote_option_id", "sequence", name="uq_quote_option_leg_seq"),
+        CheckConstraint("check_out > check_in", name="ck_quote_option_leg_dates"),
+        CheckConstraint("sequence > 0", name="ck_quote_option_leg_sequence"),
+    )
+
+    quote_option_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("quote_options.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    destination_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("destinations.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    accommodation_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("accommodations.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    # The plan the agent chose FOR THIS LEG. Meal plan is a per-leg decision: a
+    # day out of the hotel makes half board the right plan rather than a fallback
+    # from full board, and the document has to be able to tell those apart.
+    # NULL falls back to the quote's own requested plan.
+    requested_meal_plan_id: Mapped[uuid.UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("meal_plans.id", ondelete="RESTRICT"), nullable=True
+    )
+    check_in: Mapped[date] = mapped_column(Date, nullable=False)
+    check_out: Mapped[date] = mapped_column(Date, nullable=False)
+
+    # -- resolved by pricing, NULL until then (mirrors QuoteOption) ---------- #
+    room_type_id: Mapped[uuid.UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("room_types.id", ondelete="RESTRICT"), nullable=True
+    )
+    meal_plan_id: Mapped[uuid.UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("meal_plans.id", ondelete="RESTRICT"), nullable=True
+    )
+    rooms_required: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # What the agent asked for, when the engine could not honour it. Kept
+    # separate from ``meal_plan_id`` so "the client asked for full board and this
+    # leg is half board" is a fact on the record rather than an inference.
+    meal_plan_fallback_from: Mapped[str | None] = mapped_column(String(30), nullable=True)
+
+    option: Mapped[QuoteOption] = relationship(
+        "QuoteOption", back_populates="legs", foreign_keys=[quote_option_id]
     )
 
 

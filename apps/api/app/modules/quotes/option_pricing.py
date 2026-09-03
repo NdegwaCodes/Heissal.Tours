@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date
 from decimal import Decimal
 
@@ -60,6 +60,7 @@ from app.modules.quotes.options import (
     supplement_cost,
     supplier_paid,
 )
+from app.modules.quotes.packages import Leg, nights_of
 
 # --------------------------------------------------------------------------- #
 # Results
@@ -103,9 +104,37 @@ class RoomTypeQuote:
 
 
 @dataclass
+class LegCosting:
+    """One leg of a package, costed (§3.9).
+
+    A single-property option is a package of one, so this is what every option
+    is built from — there is no separate path for the common case to drift from.
+    """
+
+    sequence: int
+    accommodation_id: uuid.UUID
+    accommodation_name: str
+    destination_id: uuid.UUID
+    room: RoomTypeQuote
+    plan: MealPlan
+    plan_code: str
+    requested_plan: str
+    is_fallback: bool
+    nights: int
+    components: dict[str, Decimal]
+    supplements: list[SupplementCharge]
+    park_lines: list[CostLine]
+    warnings: list[str] = field(default_factory=list)
+
+
+@dataclass
 class OptionCosting:
     """One priced option: everything behind it, plus the two client figures."""
 
+    # Which option row this costing belongs to. Matching back by accommodation
+    # stopped being unique once an option became a package (§3.9): two curated
+    # packages can share their first property and differ later on.
+    option_id: uuid.UUID
     accommodation_id: uuid.UUID
     accommodation_name: str
     room_type_id: uuid.UUID
@@ -131,6 +160,11 @@ class OptionCosting:
     # client's confirmed requirement, and the only figures that are meaningful
     # for a mixed group, where ``build_up.per_person`` is necessarily NULL.
     cohort_prices: GroupPrice | None = None
+    # Every leg of the package, in itinerary order. One entry for a
+    # single-property option. The top-level ``room_type_*`` and ``meal_plan_*``
+    # fields above describe the FIRST leg, because a document needs something to
+    # print on one line; a package's real detail is here.
+    legs: list[LegCosting] = field(default_factory=list)
 
 
 # The one fee type an accommodation option implies. Conservancy, camping and the
@@ -240,9 +274,9 @@ class OptionPricingService:
         quote = await self._load(quote_id)
         result = await self.compute(quote)
 
-        by_accommodation = {c.accommodation_id: c for c in result.options}
+        by_option = {c.option_id: c for c in result.options}
         for option in quote.options:
-            costing = by_accommodation.get(option.accommodation_id)
+            costing = by_option.get(option.id)
             if costing is None:
                 continue
             option.room_type_id = costing.room_type_id
@@ -250,6 +284,20 @@ class OptionPricingService:
             option.rooms_required = costing.rooms_required
             option.meal_plan_fallback_from = costing.meal_plan_fallback_from
             option.is_comparable = costing.is_comparable
+            # And what each leg resolved to. A package's document prints per leg,
+            # so the resolution has to be recorded per leg — the option-level
+            # fields describe the first one only.
+            per_sequence = {one.sequence: one for one in costing.legs}
+            for leg in option.legs:
+                resolved = per_sequence.get(leg.sequence)
+                if resolved is None:
+                    continue
+                leg.room_type_id = resolved.room.room_type_id
+                leg.meal_plan_id = resolved.plan.id
+                leg.rooms_required = resolved.room.rooms
+                leg.meal_plan_fallback_from = (
+                    resolved.requested_plan if resolved.is_fallback else None
+                )
 
         # Only the engine's own refusals are replaced. An agent's typed one — the
         # reference document's "Diani Cottages, caps at 16 guests" — is not
@@ -284,21 +332,28 @@ class OptionPricingService:
 
     # -- one option ---------------------------------------------------------- #
 
-    async def _price_one(
+    async def _price_leg(
         self,
         quote: Quote,
         option: QuoteOption,
         *,
+        accommodation_id: uuid.UUID,
         nights: list[date],
         group: Group,
         requested_plan: str,
-        contingency_pct: Decimal,
-        profit_pct: Decimal,
-        rounding_step: Decimal,
+        sequence: int,
         into: OptionPricingResult,
-    ) -> None:
+    ) -> LegCosting | None:
+        """Cost one leg: pick the room type, resolve the plan, gather the extras.
+
+        This is the whole of what used to be an option. A package is an ordered
+        list of these (§3.9), and the only thing that changes per leg is the
+        property, the nights and the plan the agent asked for *for that leg* — so
+        the same code serves a one-hotel quote and a three-destination trip, and
+        there is no second implementation to drift.
+        """
         pax = group.pax
-        accommodation = await self.db.get(Accommodation, option.accommodation_id)
+        accommodation = await self.db.get(Accommodation, accommodation_id)
         if accommodation is None:
             raise NotFoundError(
                 "An option references an accommodation that no longer exists."
@@ -311,7 +366,7 @@ class OptionPricingService:
                 f"{nights[0]} to {nights[-1]} for "
                 f"{' or '.join(group.residences)}, so it could not be priced."
             )
-            return
+            return None
 
         # A plan is only usable if EVERY residency on the quote has a rate on it.
         # A property that prices non-residents on full board and residents on
@@ -332,14 +387,14 @@ class OptionPricingService:
                 )
                 + "), so it could not be priced for this group."
             )
-            return
+            return None
         plan_code, is_fallback = resolve_meal_plan(requested_plan, available)
         if plan_code is None:
             into.warnings.append(
                 f"{accommodation.name}: no rate on any plan in the "
                 f"{requested_plan} fallback chain, so it could not be priced."
             )
-            return
+            return None
         plan = await self._plan_by_code(plan_code)
 
         best: RoomTypeQuote | None = None
@@ -410,7 +465,7 @@ class OptionPricingService:
                         f"{accommodation.name}: no room type could house {pax} "
                         f"guests at the rates on file, so it could not be priced."
                     )
-            return
+            return None
 
         supplements = await self._supplements(
             quote,
@@ -453,9 +508,150 @@ class OptionPricingService:
                 f"{requested_plan} rate, so it is priced on {plan_code}"
             )
 
+        return LegCosting(
+            sequence=sequence,
+            accommodation_id=accommodation.id,
+            accommodation_name=accommodation.name,
+            destination_id=accommodation.destination_id,
+            room=best,
+            plan=plan,
+            plan_code=plan_code,
+            requested_plan=requested_plan,
+            is_fallback=is_fallback,
+            nights=len(nights),
+            components=components,
+            supplements=supplements,
+            park_lines=park_lines,
+            warnings=warnings,
+        )
+
+    async def _legs_of(
+        self,
+        option: QuoteOption,
+        quote: Quote,
+        nights: list[date],
+        requested_plan: str,
+    ) -> list[tuple[int, uuid.UUID, list[date], str]] | None:
+        """The legs to price, as ``(sequence, accommodation, nights, plan)``.
+
+        An option with no leg rows is a package of one covering the whole stay —
+        the same precedence the group vector uses over ``pax_count``, so there is
+        one answer to "what is this option?" rather than two that can disagree.
+
+        Contiguity was already enforced when the package was stored, so this
+        trusts the dates; what it will not do is *derive* a leg's nights from a
+        count, because a stored date is the only thing that survives an edit.
+        """
+        if not option.legs:
+            return [(1, option.accommodation_id, nights, requested_plan)]
+
+        plans = {
+            row.id: row.code.upper()
+            for row in (await self.db.execute(select(MealPlan))).scalars().all()
+        }
+        out: list[tuple[int, uuid.UUID, list[date], str]] = []
+        for leg in sorted(option.legs, key=lambda entry: entry.sequence):
+            # Meal plan is a per-leg decision (§3.9): a day out of the hotel
+            # makes half board the right plan rather than a fallback from full
+            # board, and the two have to be distinguishable on the document.
+            plan = plans.get(leg.requested_meal_plan_id or uuid.UUID(int=0))
+            out.append(
+                (
+                    leg.sequence,
+                    leg.accommodation_id,
+                    nights_of(
+                        Leg(
+                            sequence=leg.sequence,
+                            destination=str(leg.destination_id),
+                            check_in=leg.check_in,
+                            check_out=leg.check_out,
+                        )
+                    ),
+                    plan or requested_plan,
+                )
+            )
+        return out
+
+    # -- one option, which is one or more legs ------------------------------- #
+
+    async def _price_one(
+        self,
+        quote: Quote,
+        option: QuoteOption,
+        *,
+        nights: list[date],
+        group: Group,
+        requested_plan: str,
+        contingency_pct: Decimal,
+        profit_pct: Decimal,
+        rounding_step: Decimal,
+        into: OptionPricingResult,
+    ) -> None:
+        """Price a curated package — one property per leg (§3.9).
+
+        A single-property option is a package of one, priced by exactly the same
+        path, so nothing about the common case is special-cased.
+
+        The legs are summed rather than compared: they are one offer, not
+        alternatives. If any leg cannot be priced the whole package is dropped,
+        because half a trip is not something to put in front of a client.
+        """
+        legs = await self._legs_of(option, quote, nights, requested_plan)
+        if legs is None:
+            return
+
+        costed: list[LegCosting] = []
+        for sequence, accommodation_id, leg_nights, leg_plan in legs:
+            one = await self._price_leg(
+                quote,
+                option,
+                accommodation_id=accommodation_id,
+                nights=leg_nights,
+                group=group,
+                requested_plan=leg_plan,
+                sequence=sequence,
+                into=into,
+            )
+            if one is None:
+                # Already warned about by _price_leg. A package missing a leg is
+                # not a cheaper package, it is an incomplete one.
+                if len(legs) > 1:
+                    into.warnings.append(
+                        f"Package option {option.sort_order}: leg {sequence} "
+                        f"could not be priced, so the whole package was dropped."
+                    )
+                return
+            costed.append(one)
+
+        lead = costed[0]
+        components: dict[str, Decimal] = {}
+        for one in costed:
+            for label, amount in one.components.items():
+                components[label] = components.get(label, Decimal(0)) + amount
+
+        # The room cost split by residency, merged across legs, so each residency
+        # is still priced off its own sheets in its own currency (§3.8).
+        merged_by_residence: dict[str, dict[str, Decimal]] = {}
+        for one in costed:
+            for residence, buckets in one.room.costed_by_residence.items():
+                target = merged_by_residence.setdefault(residence, {})
+                for currency, amount in buckets.items():
+                    target[currency] = target.get(currency, Decimal(0)) + amount
+
+        park_lines = [line for one in costed for line in one.park_lines]
+        supplements = [charge for one in costed for charge in one.supplements]
+        warnings = [
+            (f"leg {one.sequence} ({one.accommodation_name}): {note}"
+             if len(costed) > 1 else note)
+            for one in costed
+            for note in one.warnings
+        ]
+        paid_total = sum((one.room.paid_total for one in costed), Decimal(0))
+        costed_total = sum((one.room.costed_total for one in costed), Decimal(0))
+
         totals = build_up(
             components=components,
-            pax=pax,
+            pax=group.pax,
             contingency_pct=contingency_pct,
             profit_pct=profit_pct,
             agent_cover_fee=option.agent_cover_fee,
@@ -466,12 +662,15 @@ class OptionPricingService:
             # group got one per-person figure covering two currencies.
             uniform_group=group.is_uniform,
         )
+        # ``best`` is handed the merged per-residency split, so a package's
+        # accommodation lines reach the right cohorts across every leg.
+        merged = replace(lead.room, costed_by_residence=merged_by_residence)
         cohort_prices = await self._per_cohort(
             quote,
-            best,
+            merged,
             park_lines=park_lines,
             shared=components,
-            capacity_of=best.room_type_id,
+            capacity_of=lead.room.room_type_id,
             group=group,
             nights=nights,
             contingency_pct=contingency_pct,
@@ -481,27 +680,41 @@ class OptionPricingService:
         )
         into.options.append(
             OptionCosting(
-                accommodation_id=accommodation.id,
-                accommodation_name=accommodation.name,
-                room_type_id=best.room_type_id,
-                room_type_name=best.room_type_name,
-                meal_plan_id=plan.id,
-                meal_plan_code=plan_code,
-                meal_plan_name=plan.name,
-                meal_plan_fallback_from=requested_plan if is_fallback else None,
-                rooms_required=best.rooms,
-                nights=len(nights),
+                option_id=option.id,
+                accommodation_id=lead.accommodation_id,
+                accommodation_name=(
+                    lead.accommodation_name
+                    if len(costed) == 1
+                    else " → ".join(one.accommodation_name for one in costed)
+                ),
+                room_type_id=lead.room.room_type_id,
+                room_type_name=lead.room.room_type_name,
+                meal_plan_id=lead.plan.id,
+                meal_plan_code=lead.plan_code,
+                meal_plan_name=lead.plan.name,
+                meal_plan_fallback_from=(
+                    lead.requested_plan if lead.is_fallback else None
+                ),
+                # The most rooms the package needs at any point. Legs are
+                # sequential, not simultaneous, so summing them would book a
+                # room in Diani for a night spent in the Mara.
+                rooms_required=max(one.room.rooms for one in costed),
+                nights=sum(one.nights for one in costed),
                 currency=quote.presentation_currency.upper(),
                 components=components,
                 supplements=supplements,
-                supplier_paid_total=best.paid_total,
-                retained_discount=best.retained_discount,
+                supplier_paid_total=paid_total,
+                retained_discount=costed_total - paid_total,
                 build_up=totals,
                 # An option priced on a different board basis is not comparable
                 # with the others; an agent flag can only narrow that, not widen it.
-                is_comparable=option.is_comparable and not is_fallback,
+                is_comparable=(
+                    option.is_comparable
+                    and not any(one.is_fallback for one in costed)
+                ),
                 warnings=warnings,
                 cohort_prices=cohort_prices,
+                legs=costed,
             )
         )
 

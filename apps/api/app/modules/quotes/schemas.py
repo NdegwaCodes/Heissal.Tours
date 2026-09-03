@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from datetime import date, datetime
 from decimal import Decimal
 
@@ -83,6 +84,46 @@ class TransportIn(BaseModel):
     days: int = Field(default=1, ge=1)
 
 
+class OptionLegIn(BaseModel):
+    """One leg of a curated multi-destination package (§3.9).
+
+    Dates rather than a night count: the two say the same thing only while
+    nothing is edited, and the moment a middle leg moves by a day only dates
+    record what happened.
+    """
+
+    sequence: int = Field(ge=1)
+    destination_id: uuid.UUID
+    accommodation_id: uuid.UUID
+    check_in: date
+    check_out: date
+    # The plan for THIS leg. A day out of the hotel makes half board the right
+    # choice rather than a fallback from full board, and the document has to be
+    # able to tell those apart. NULL uses the quote's own requested plan.
+    requested_meal_plan_id: uuid.UUID | None = None
+
+    @model_validator(mode="after")
+    def _check_dates(self) -> OptionLegIn:
+        if self.check_out <= self.check_in:
+            raise ValueError("check_out must be after check_in")
+        return self
+
+
+class OptionLegRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    sequence: int
+    destination_id: uuid.UUID
+    accommodation_id: uuid.UUID
+    check_in: date
+    check_out: date
+    requested_meal_plan_id: uuid.UUID | None
+    room_type_id: uuid.UUID | None
+    meal_plan_id: uuid.UUID | None
+    rooms_required: int | None
+    meal_plan_fallback_from: str | None
+
+
 class QuoteOptionIn(BaseModel):
     """One property to offer on the quote (§3.7).
 
@@ -103,6 +144,10 @@ class QuoteOptionIn(BaseModel):
     # engine can add that flag but never remove it.
     is_comparable: bool = True
     notes: str | None = None
+    # A curated package: one property per leg (§3.9). Empty means the
+    # single-property option `accommodation_id` already describes, which is
+    # most quotes. Legs take precedence when present.
+    legs: list[OptionLegIn] = Field(default_factory=list)
 
 
 class QuoteCreate(BaseModel):
@@ -229,6 +274,9 @@ class QuoteOptionResolvedRead(BaseModel):
     is_comparable: bool
     is_recommended: bool
     sort_order: int
+    # The curated package, in itinerary order. Empty for a single-property
+    # option, which is most quotes (§3.9).
+    legs: list[OptionLegRead] = Field(default_factory=list)
 
 
 class QuoteRead(BaseModel):
@@ -425,6 +473,30 @@ class SupplementChargeInternal(BaseModel):
     cost: Decimal
 
 
+class PricedLegRead(BaseModel):
+    """One leg of a priced package, as the client sees it (§3.9).
+
+    No ``meal_plan_fallback_from``. That the property had no rate on the plan
+    the client asked for is an internal fact — it says something about our data
+    and our negotiation, not about their holiday — and the option-level field is
+    already restricted to ``quote:read_cost``. Putting it on the client schema
+    per leg leaked it, which the cost-leak sweep caught.
+    """
+
+    sequence: int
+    accommodation_name: str
+    room_type_name: str
+    meal_plan_code: str
+    rooms_required: int
+    nights: int
+
+
+class PricedLegInternalRead(PricedLegRead):
+    """The same leg for staff, plus why it is not what was asked for."""
+
+    meal_plan_fallback_from: str | None = None
+
+
 class CohortPriceRead(BaseModel):
     """What one cohort pays, in its own billing currency (§3.8).
 
@@ -459,6 +531,13 @@ class QuoteOptionClientRead(BaseModel):
     # One row per cohort. Residents in KES beside non-residents in USD, adults
     # apart from children — what the client asked to be able to show.
     cohorts: list[CohortPriceRead] = Field(default_factory=list)
+    # One entry per leg of the package. A single-property option has one; the
+    # top-level room and plan fields above describe the first leg only.
+    #
+    # Sequence rather than list so the internal schema can narrow it to
+    # PricedLegInternalRead — a list is invariant, so overriding it with a
+    # subclass is unsound and mypy is right to say so.
+    legs: Sequence[PricedLegRead] = Field(default_factory=list)
     # The rates used to reach a group total spanning currencies. A converted
     # total with an unstated rate is a dispute waiting to happen.
     conversions: dict[str, Decimal] = Field(default_factory=dict)
@@ -475,6 +554,8 @@ class QuoteOptionInternalRead(QuoteOptionClientRead):
     supplements: list[SupplementChargeInternal]
     build_up: OptionBuildUpInternal
     warnings: list[str]
+    # Overrides the client's leg rows with the fallback reason included.
+    legs: list[PricedLegInternalRead] = Field(default_factory=list)
 
 
 class RejectedCandidateRead(BaseModel):
