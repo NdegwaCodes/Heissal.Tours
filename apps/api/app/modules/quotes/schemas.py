@@ -618,13 +618,6 @@ class QuoteOptionClientRead(BaseModel):
     # The rates used to reach a group total spanning currencies. A converted
     # total with an unstated rate is a dispute waiting to happen.
     conversions: dict[str, Decimal] = Field(default_factory=dict)
-    # Flights on the itinerary, named and unpriced (§3.10). Client-facing on
-    # purpose: the fare is an exclusion, and a client who is not told to book
-    # their own ticket is a client who arrives without one.
-    transport_named: list[str] = Field(default_factory=list)
-    # What the add-ons sell for — VVIP transport and the rest. A price, not the
-    # cost behind it, and never part of group_total.
-    optional_transport_price: Decimal = Decimal(0)
 
 
 class QuoteOptionInternalRead(QuoteOptionClientRead):
@@ -640,14 +633,7 @@ class QuoteOptionInternalRead(QuoteOptionClientRead):
     warnings: list[str]
     # Overrides the client's leg rows with the fallback reason included.
     legs: list[PricedLegInternalRead] = Field(default_factory=list)
-    # The journey as costed (§3.10). Identical across options, because it is
-    # the same journey whichever hotel is chosen.
-    transport: list[TransportChargeInternal] = Field(default_factory=list)
-    transport_optional: list[TransportChargeInternal] = Field(default_factory=list)
-    optional_transport_total: Decimal = Decimal(0)
-    # Movements with no tariff on file. Blocking at readiness: a movement
-    # priced at zero reads on a document as one the client is not charged for.
-    unpriced_transport: list[str] = Field(default_factory=list)
+
 
 
 class RejectedCandidateRead(BaseModel):
@@ -662,6 +648,15 @@ class RejectedCandidateRead(BaseModel):
 class OptionPricingClientResult(BaseModel):
     options: list[QuoteOptionClientRead]
     rejected: list[RejectedCandidateRead]
+    # The journey (§3.10), which belongs to the quote and not to an option: it
+    # is the same journey whichever hotel is chosen. Flights are named because
+    # the fare is an exclusion, and a client who is not told to book their own
+    # ticket is a client who arrives without one; the tariffs behind the rest
+    # are internal, since the price is already in each option's total.
+    transport_named: list[str] = Field(default_factory=list)
+    # What the add-ons sell for. A price, not the cost behind it, and never
+    # part of any option's group_total.
+    optional_transport_price: Decimal = Decimal(0)
 
 
 class OptionPricingInternalResult(BaseModel):
@@ -670,6 +665,16 @@ class OptionPricingInternalResult(BaseModel):
     # Why a property on the quote could not be priced at all. Internal because it
     # describes gaps in our own rate data, not anything about the hotel.
     warnings: list[str]
+    # The journey as costed (§3.10).
+    transport: list[TransportChargeInternal] = Field(default_factory=list)
+    transport_optional: list[TransportChargeInternal] = Field(default_factory=list)
+    transport_total: Decimal = Decimal(0)
+    optional_transport_total: Decimal = Decimal(0)
+    optional_transport_price: Decimal = Decimal(0)
+    transport_named: list[str] = Field(default_factory=list)
+    # Movements with no tariff on file. Blocking at readiness: a movement
+    # priced at zero reads on a document as one the client is not charged for.
+    unpriced_transport: list[str] = Field(default_factory=list)
 
 
 # --------------------------------------------------------------------------- #

@@ -209,8 +209,6 @@ def _client_option(costing: OptionCosting) -> QuoteOptionClientRead:
         conversions=(
             dict(costing.cohort_prices.conversions) if costing.cohort_prices else {}
         ),
-        transport_named=costing.transport_named,
-        optional_transport_price=costing.optional_transport_price,
     )
 
 
@@ -244,15 +242,6 @@ def _internal_option(costing: OptionCosting) -> QuoteOptionInternalRead:
         ],
         build_up=OptionBuildUpInternal.model_validate(costing.build_up),
         warnings=costing.warnings,
-        transport=[
-            TransportChargeInternal.model_validate(c) for c in costing.transport
-        ],
-        transport_optional=[
-            TransportChargeInternal.model_validate(c)
-            for c in costing.transport_optional
-        ],
-        optional_transport_total=costing.optional_transport_total,
-        unpriced_transport=costing.unpriced_transport,
     )
 
 
@@ -260,14 +249,31 @@ def _option_result(
     result: OptionPricingResult, *, internal: bool
 ) -> OptionPricingInternalResult | OptionPricingClientResult:
     rejected = [RejectedCandidateRead.model_validate(r) for r in result.rejected]
+    journey = result.transport
     if internal:
         return OptionPricingInternalResult(
             options=[_internal_option(o) for o in result.options],
             rejected=rejected,
             warnings=result.warnings,
+            transport=[
+                TransportChargeInternal.model_validate(c) for c in journey.charges
+            ],
+            transport_optional=[
+                TransportChargeInternal.model_validate(c) for c in journey.optional
+            ],
+            transport_total=journey.total,
+            optional_transport_total=journey.optional_total,
+            optional_transport_price=journey.optional_price,
+            transport_named=journey.named,
+            unpriced_transport=journey.unpriced,
         )
     return OptionPricingClientResult(
-        options=[_client_option(o) for o in result.options], rejected=rejected
+        options=[_client_option(o) for o in result.options],
+        rejected=rejected,
+        # The journey belongs to the quote, not to an option: it is the same
+        # journey whichever hotel is chosen (§3.10).
+        transport_named=journey.named,
+        optional_transport_price=journey.optional_price,
     )
 
 

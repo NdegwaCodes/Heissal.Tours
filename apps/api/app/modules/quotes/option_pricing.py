@@ -140,6 +140,9 @@ class TransportCosting:
     #: priced at zero is the exact failure this stage exists to prevent.
     unpriced: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    #: What the add-ons sell for: ``optional_total`` through the same build-up
+    #: as the package, because an add-on offered at cost is sold at a loss.
+    optional_price: Decimal = Decimal(0)
 
 
 @dataclass
@@ -222,20 +225,6 @@ class OptionCosting:
     # client's confirmed requirement, and the only figures that are meaningful
     # for a mixed group, where ``build_up.per_person`` is necessarily NULL.
     cohort_prices: GroupPrice | None = None
-    # The journey (§3.10), identical across options because it is the same
-    # journey: what is in the package price, what is offered as an add-on, the
-    # flights that are named but not ours to sell, and the movements no tariff
-    # covers.
-    transport: list[TransportCharge] = field(default_factory=list)
-    transport_optional: list[TransportCharge] = field(default_factory=list)
-    transport_named: list[str] = field(default_factory=list)
-    unpriced_transport: list[str] = field(default_factory=list)
-    # The add-ons' cost, and what they sell for. Both, because an add-on offered
-    # at cost is an add-on sold at a loss: it carries the same contingency and
-    # margin as everything else in the package, and the client-facing figure is
-    # the second one.
-    optional_transport_total: Decimal = Decimal(0)
-    optional_transport_price: Decimal = Decimal(0)
     # Every leg of the package, in itinerary order. One entry for a
     # single-property option. The top-level ``room_type_*`` and ``meal_plan_*``
     # fields above describe the FIRST leg, because a document needs something to
@@ -288,6 +277,10 @@ class OptionPricingResult:
     rejected: list[RejectedOption] = field(default_factory=list)
     # Internal only: why a property could not be priced at all. Never rendered.
     warnings: list[str] = field(default_factory=list)
+    # The journey (§3.10). One per quote, not one per option: it is the same
+    # journey whichever hotel is chosen, and holding it per option would invite
+    # someone to make it differ. Its total is inside every option's build-up.
+    transport: TransportCosting = field(default_factory=lambda: TransportCosting())
 
 
 # --------------------------------------------------------------------------- #
@@ -326,8 +319,21 @@ class OptionPricingService:
         # journey whichever hotel is chosen, and one lookup per quote also means
         # every option is charged transport at the same fares (§3.10).
         transport = await self._transport(quote, group=group)
+        if transport.optional_total:
+            # An add-on is priced through the same build-up as the package, so a
+            # VVIP upgrade offered separately still carries contingency and
+            # margin. No agent cover fee: that is charged once on the quote, not
+            # again on each extra.
+            transport.optional_price = build_up(
+                components={"transport": transport.optional_total},
+                pax=group.pax,
+                contingency_pct=contingency,
+                profit_pct=profit,
+                rounding_step=cfg.per_person_rounding,
+                uniform_group=group.is_uniform,
+            ).group_total
 
-        result = OptionPricingResult()
+        result = OptionPricingResult(transport=transport)
         for option in sorted(quote.options, key=lambda o: o.sort_order):
             await self._price_one(
                 quote,
@@ -749,22 +755,6 @@ class OptionPricingService:
             # group got one per-person figure covering two currencies.
             uniform_group=group.is_uniform,
         )
-        # An add-on is priced through the same build-up as the package, so a
-        # VVIP upgrade offered separately is still offered with contingency and
-        # margin on it. No agent cover fee: that is charged once on the quote,
-        # not again on each extra.
-        add_on = (
-            build_up(
-                components={"transport": transport.optional_total},
-                pax=group.pax,
-                contingency_pct=contingency_pct,
-                profit_pct=profit_pct,
-                rounding_step=rounding_step,
-                uniform_group=group.is_uniform,
-            ).group_total
-            if transport.optional_total
-            else Decimal(0)
-        )
         # ``best`` is handed the merged per-residency split, so a package's
         # accommodation lines reach the right cohorts across every leg.
         merged = replace(lead.room, costed_by_residence=merged_by_residence)
@@ -817,12 +807,6 @@ class OptionPricingService:
                 ),
                 warnings=warnings,
                 cohort_prices=cohort_prices,
-                transport=transport.charges,
-                transport_optional=transport.optional,
-                transport_named=transport.named,
-                unpriced_transport=transport.unpriced,
-                optional_transport_total=transport.optional_total,
-                optional_transport_price=add_on,
                 legs=costed,
             )
         )

@@ -34,6 +34,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import AppError, NotFoundError
 from app.modules.accommodations.models import Accommodation
+from app.modules.destinations.models import Destination
 from app.modules.pricing.config import PricingConfig
 from app.modules.pricing.service import PricingConfigService
 from app.modules.quotes.models import (
@@ -334,10 +335,7 @@ class QuoteAssemblyService:
                     f"document can only lead on one.",
                 )
             )
-        elif not any(
-            o.accommodation_id == recommended[0].accommodation_id
-            for o in priced.options
-        ):
+        elif not any(o.option_id == recommended[0].id for o in priced.options):
             problems.append(
                 Problem(
                     BLOCKING,
@@ -414,6 +412,30 @@ class QuoteAssemblyService:
                 )
         return out
 
+    async def _destination_names(
+        self, priced: OptionPricingResult
+    ) -> dict[uuid.UUID, str]:
+        """Destination names for the legs being frozen.
+
+        Looked up once and stored *by name* in the snapshot: a destination
+        renamed or merged years later must not change what a version says was
+        quoted, and an id in a frozen document is not something a client can
+        read.
+        """
+        wanted = {leg.destination_id for option in priced.options for leg in option.legs}
+        if not wanted:
+            return {}
+        rows = (
+            (
+                await self.db.execute(
+                    select(Destination).where(Destination.id.in_(wanted))
+                )
+            )
+            .scalars()
+            .all()
+        )
+        return {row.id: row.name for row in rows}
+
     @staticmethod
     def _transport_problems(
         quote: Quote, priced: OptionPricingResult
@@ -445,14 +467,7 @@ class QuoteAssemblyService:
                     found.message,
                 )
             )
-        # Identical across options — it is the same journey — so it is reported
-        # once rather than once per hotel.
-        unpriced: list[str] = []
-        for option in priced.options:
-            for movement in option.unpriced_transport:
-                if movement not in unpriced:
-                    unpriced.append(movement)
-        for movement in unpriced:
+        for movement in priced.transport.unpriced:
             out.append(
                 Problem(
                     BLOCKING,
@@ -525,9 +540,13 @@ class QuoteAssemblyService:
                 + " ".join(f"({p.code}) {p.message}" for p in blocking)
             )
 
-        recommended_id = next(o.accommodation_id for o in quote.options if o.is_recommended)
+        # By option id, not by property. Two curated packages can share their
+        # lead hotel and differ on a later leg (§3.9), so matching on the
+        # accommodation could take its headline money — and its margin — from
+        # the wrong package entirely.
+        recommended_option = next(o for o in quote.options if o.is_recommended)
         headline = next(
-            o for o in priced.options if o.accommodation_id == recommended_id
+            o for o in priced.options if o.option_id == recommended_option.id
         )
 
         next_number = (
@@ -541,14 +560,16 @@ class QuoteAssemblyService:
         version = QuoteVersion(
             quote_id=quote.id,
             version_number=int(next_number),
-            snapshot=_snapshot(quote, priced, readiness),
+            snapshot=_snapshot(
+                quote, priced, readiness, destinations=await self._destination_names(priced)
+            ),
             currency=headline.currency,
             created_by=actor_id,
             **_headline_money(headline),
         )
-        options_by_accommodation = {o.accommodation_id: o for o in quote.options}
+        options_by_id = {o.id: o for o in quote.options}
         for order, costing in enumerate(priced.options, start=1):
-            option = options_by_accommodation[costing.accommodation_id]
+            option = options_by_id[costing.option_id]
             version.options.append(
                 QuoteVersionOption(
                     option_id=option.id,
@@ -671,17 +692,23 @@ def _money(value: Decimal) -> Decimal:
 
 
 def _snapshot(
-    quote: Quote, priced: OptionPricingResult, readiness: Readiness
+    quote: Quote,
+    priced: OptionPricingResult,
+    readiness: Readiness,
+    *,
+    destinations: dict[uuid.UUID, str] | None = None,
 ) -> dict:
     """The whole computed quote as JSON, for reconstructing it years later.
 
     Denormalised on purpose: a property renamed or a rate superseded must not
     change what this version says was quoted.
     """
-    recommended = {
-        o.accommodation_id: o.is_recommended for o in quote.options
-    }
-    order = {o.accommodation_id: o.sort_order for o in quote.options}
+    # Keyed on the option row, not on its property: two packages may share a
+    # hotel, and a dict keyed on that would collapse them into one entry and
+    # hand the second one the first's recommendation and position.
+    recommended = {o.id: o.is_recommended for o in quote.options}
+    order = {o.id: o.sort_order for o in quote.options}
+    destinations = destinations or {}
     return {
         "quote_number": quote.quote_number,
         "currency": quote.presentation_currency.upper(),
@@ -690,6 +717,7 @@ def _snapshot(
         "pax_count": quote.pax_count,
         "options": [
             {
+                "option_id": str(o.option_id),
                 "accommodation_id": str(o.accommodation_id),
                 "accommodation_name": o.accommodation_name,
                 "room_type_name": o.room_type_name,
@@ -701,8 +729,8 @@ def _snapshot(
                 "is_comparable": o.is_comparable,
                 # Frozen so the document leads on the option that was actually
                 # recommended when it went out, not on whatever is flagged today.
-                "is_recommended": recommended.get(o.accommodation_id, False),
-                "sort_order": order.get(o.accommodation_id, 0),
+                "is_recommended": recommended.get(o.option_id, False),
+                "sort_order": order.get(o.option_id, 0),
                 "components": {k: str(v) for k, v in o.components.items()},
                 "supplements": [
                     {
@@ -726,9 +754,78 @@ def _snapshot(
                 ),
                 "group_total": str(o.build_up.group_total),
                 "warnings": list(o.warnings),
+                # The itinerary as quoted (§3.9). Frozen per leg, not derived
+                # from the option row, because a package's legs can be re-dated
+                # or re-pointed afterwards and the document has to keep saying
+                # what the client was actually offered.
+                "legs": [
+                    {
+                        "sequence": leg.sequence,
+                        "accommodation_name": leg.accommodation_name,
+                        "destination_name": destinations.get(leg.destination_id, ""),
+                        "room_type_name": leg.room.room_type_name,
+                        "meal_plan_code": leg.plan_code,
+                        "meal_plan_name": leg.plan.name,
+                        "rooms_required": leg.room.rooms,
+                        "nights": leg.nights,
+                        "meal_plan_fallback_from": (
+                            leg.requested_plan if leg.is_fallback else None
+                        ),
+                    }
+                    for leg in o.legs
+                ],
+                # What each cohort pays in its own currency (§3.8), and the
+                # rates that got there. A converted total with an unstated rate
+                # is a dispute waiting to happen, and the rate on file today is
+                # not the rate the client was quoted at.
+                "cohorts": [
+                    {
+                        "residence": price.cohort.residence,
+                        "traveller_type": price.cohort.traveller_type,
+                        "headcount": price.cohort.count,
+                        "currency": price.currency,
+                        "per_person": str(price.per_person),
+                        "total": str(price.total),
+                    }
+                    for price in (o.cohort_prices.cohorts if o.cohort_prices else ())
+                ],
+                "conversions": {
+                    pair: str(rate)
+                    for pair, rate in (
+                        o.cohort_prices.conversions if o.cohort_prices else {}
+                    ).items()
+                },
             }
             for o in priced.options
         ],
+        # The journey (§3.10) — quote-level, because it is the same journey
+        # whichever option the client picks. Frozen for the same reason the
+        # options are: the document is rendered from this, and segments can be
+        # edited after a version goes out.
+        "transport": {
+            "total": str(priced.transport.total),
+            "optional_total": str(priced.transport.optional_total),
+            "optional_price": str(priced.transport.optional_price),
+            "named": list(priced.transport.named),
+            "movements": [
+                {
+                    "sequence": charge.sequence,
+                    "kind": charge.kind,
+                    "mode": charge.mode,
+                    "label": charge.label,
+                    "basis": charge.basis,
+                    "units": charge.units,
+                    "unit_amount": str(charge.unit_amount),
+                    "currency": charge.currency,
+                    "cost": str(charge.cost),
+                    "is_optional": charge.is_optional,
+                    "is_vvip": charge.is_vvip,
+                }
+                for charge in (
+                    priced.transport.charges + priced.transport.optional
+                )
+            ],
+        },
         # Every property shown as considered-and-declined, engine-derived and
         # agent-typed alike: the client saw both, so the snapshot holds both.
         "rejected": [

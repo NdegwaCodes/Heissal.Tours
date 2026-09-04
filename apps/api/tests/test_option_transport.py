@@ -301,6 +301,7 @@ async def _priced(client, h, ids, **kw):
 
 
 def _transport_of(option):
+    """What the journey added to this option's cost."""
     return D(option["build_up"]["components"].get("transport", "0"))
 
 
@@ -467,9 +468,9 @@ async def test_a_flight_is_named_and_never_priced(client, admin_tokens, rail_tow
         ],
     )
     option = body["options"][0]
-    assert any("Nairobi to Malindi" in named for named in option["transport_named"])
+    assert any("Nairobi to Malindi" in named for named in body["transport_named"])
     assert _transport_of(option) == SALOON * 4
-    assert [c["mode"] for c in option["transport"]] == ["road"] * 4
+    assert [c["mode"] for c in body["transport"]] == ["road"] * 4
 
 
 async def test_the_flight_is_reported_at_readiness(client, admin_tokens, rail_town):
@@ -566,9 +567,8 @@ async def test_a_movement_with_no_tariff_blocks_rather_than_pricing_at_zero(
         rail_town,
         segments=[_transfer(1, vehicle_type="coaster"), _transfer(2)],
     )
-    option = body["options"][0]
-    assert len(option["unpriced_transport"]) == 1, option["unpriced_transport"]
-    assert _transport_of(option) == SALOON
+    assert len(body["unpriced_transport"]) == 1, body["unpriced_transport"]
+    assert _transport_of(body["options"][0]) == SALOON
     resp = await client.get(
         f"{API}/quotes/{quote_id}/readiness", headers=_h(admin_tokens)
     )
@@ -646,6 +646,7 @@ async def test_a_transfer_priced_off_another_route_says_so(
     assert _transport_of(option) == MINIBUS * 2
     mismatched = [w for w in option["warnings"] if "Terminus to hotel" in w]
     assert len(mismatched) == 1, option["warnings"]
+    assert D(body["transport_total"]) == MINIBUS * 2
 
 
 # --------------------------------------------------------------------------- #
@@ -673,11 +674,10 @@ async def test_a_vvip_add_on_is_priced_apart_from_the_package(
             _transfer(3, is_optional=True, is_vvip=True),
         ],
     )
-    option = body["options"][0]
-    assert _transport_of(option) == SALOON * 2
-    assert D(option["optional_transport_total"]) == SALOON
-    assert D(option["optional_transport_price"]) == D("6000")
-    assert [c["is_vvip"] for c in option["transport_optional"]] == [True]
+    assert _transport_of(body["options"][0]) == SALOON * 2
+    assert D(body["optional_transport_total"]) == SALOON
+    assert D(body["optional_transport_price"]) == D("6000")
+    assert [c["is_vvip"] for c in body["transport_optional"]] == [True]
 
 
 async def test_vvip_inside_the_package_is_flagged_at_readiness(
@@ -737,7 +737,16 @@ async def test_a_client_facing_role_sees_the_flight_but_no_tariff(
         f"{API}/quotes/{created.json()['id']}/options/price", headers=agent
     )
     assert resp.status_code == 200, resp.text
-    option = resp.json()["options"][0]
-    assert option["transport_named"], option
-    for leaked in ("transport", "transport_optional", "optional_transport_total"):
-        assert leaked not in option, leaked
+    body = resp.json()
+    assert body["transport_named"], body
+    # The journey's own tariffs are ours; the ticket the client must buy is
+    # theirs. Neither the charges nor the costs behind them reach this view.
+    for leaked in (
+        "transport",
+        "transport_optional",
+        "transport_total",
+        "optional_transport_total",
+        "unpriced_transport",
+    ):
+        assert leaked not in body, leaked
+    assert "optional_transport_price" in body

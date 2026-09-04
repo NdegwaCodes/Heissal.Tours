@@ -453,3 +453,45 @@ async def test_readiness_catches_a_package_broken_by_a_date_change(
     codes = {p["code"] for p in body["problems"]}
     assert "package_ends_before_departure" in codes, body["problems"]
     assert body["is_ready"] is False
+
+
+# --------------------------------------------------------------------------- #
+# Two packages that share a hotel are still two packages (§3.9, §3.11)
+# --------------------------------------------------------------------------- #
+
+
+async def test_issuing_takes_the_headline_from_the_recommended_package(
+    client, admin_tokens, sample_catalogue, upcountry_lodge
+):
+    """Both packages start at Coral Sands and differ on where the nights go.
+
+        recommended  Diani 1 + lodge 2 = 45,000 -> group 58,600
+        the other    Diani 2 + lodge 1 = 36,000 -> group 47,000
+
+    The version's money, margin and per-option rows were matched to the quote's
+    options **by property** until 3.11. With two packages sharing a lead hotel
+    that is not a key: one of them silently took the other's figures, and the
+    dict that mapped them collapsed to a single entry. It is the option id now.
+    """
+    h, ids = _h(admin_tokens), sample_catalogue
+    recommended = _two_legs(ids, upcountry_lodge)
+    recommended["is_recommended"] = True
+    later_switch = _two_legs(ids, upcountry_lodge, switch="2026-07-03")
+    later_switch["sort_order"] = 2
+    quote = await _quote(client, h, ids, options=[recommended, later_switch])
+    assert quote.status_code == 201, quote.text
+    quote_id = quote.json()["id"]
+
+    issued = await client.post(f"{API}/quotes/{quote_id}/issue", headers=h)
+    assert issued.status_code == 200, issued.text
+    version = issued.json()
+    assert D(version["selling_price"]) == D("58600.00")
+
+    rows = version["options"]
+    assert len(rows) == 2, rows
+    # Distinct option rows, each with its own total: nothing collapsed.
+    assert len({row["option_id"] for row in rows}) == 2, rows
+    by_recommendation = {row["is_recommended"]: D(row["selling_total"]) for row in rows}
+    assert by_recommendation == {True: D("58600.00"), False: D("47000.00")}
+    stored = (await client.get(f"{API}/quotes/{quote_id}", headers=h)).json()
+    assert {row["option_id"] for row in rows} == {o["id"] for o in stored["options"]}
