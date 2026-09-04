@@ -346,7 +346,7 @@ async def test_the_comparison_table_is_cheapest_first(
     h = _h(admin_tokens)
     quote, _ = await _issued_quote(client, h, sample_catalogue)
     html = await _render(client, h, quote["id"])
-    table = html.split("Accommodation Options")[1]
+    table = html.split("At a Glance")[1]
     coral = table.index("Coral Sands")
     baobab = table.index("Baobab")
     # Coral Sands at 447,500 is cheaper than Baobab at 1,152,500.

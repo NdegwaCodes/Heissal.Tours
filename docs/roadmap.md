@@ -197,7 +197,24 @@ backend-only and the client sees per-person and group totals only.
     not charged the outbound fare. VAT normalised on the way out for these two tables
   - VVIP is quoted apart from the package but through the same build-up: an add-on offered at
     cost is sold at a loss
-- ☐ 3.11 The curated package x transport table
+- ☑ 3.11 The curated package x transport table — the document now renders what 3.8-3.10
+  computed (`app/modules/documents/viewmodel.py`, `quotation.html.j2`, 11 new tests in
+  `tests/test_document_packages.py`), and one real defect closed on the way
+  - **Options are identified by `option_id`, never by property.** Two packages sharing a lead
+    hotel could hand the version their headline money and margin from the wrong one, and the
+    mapping dict collapsed both onto a single option row (see decision log)
+  - **The version freezes the itinerary and the journey** — legs by name, per-cohort prices in
+    their own currencies with the rates used, residence display names, the headcount pricing
+    used, and the movements. The transport page read the quote's *live* segments before, so an
+    issued document could start describing a different journey
+  - **"0 participants" on a cohort quote** — a quote given cohorts has no `pax_count`, so the
+    document read zero beside a price for four people. The version records `build_group`'s answer
+  - A full-width itinerary table past one leg; the route in the comparison table's property cell
+    rather than a seventh column; per-cohort prices as a stacked list in the price panel, shown
+    only where there are two or more cohorts; repeated movements counted rather than listed
+  - Verified by rendering to PDF and reading the pages back, which is what caught the A4
+    overflow (fixed by dropping a duplicate fact cell, the gallery strip and 24mm of hero) and
+    the transport page printing "Terminus to hotel - Included" four times
 - ☐ 3.12 Internal costing worksheet (the mirror of the client document, every line with its
   basis, multiplier and source document) + the exclusions list (travel insurance and the rest)
 

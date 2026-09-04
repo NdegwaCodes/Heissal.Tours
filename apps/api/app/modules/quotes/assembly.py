@@ -61,6 +61,7 @@ from app.modules.quotes.schemas import (
 from app.modules.quotes.service import QuoteService
 from app.modules.quotes.transport import check as check_transport
 from app.modules.quotes.transport import segments_of
+from app.modules.residence.models import ResidenceCategory
 
 BLOCKING = "blocking"
 ADVISORY = "advisory"
@@ -436,6 +437,11 @@ class QuoteAssemblyService:
         )
         return {row.id: row.name for row in rows}
 
+    async def _residence_labels(self) -> dict[str, str]:
+        """``{key: name}`` for the residence categories, for the frozen cohorts."""
+        rows = (await self.db.execute(select(ResidenceCategory))).scalars().all()
+        return {row.key: row.name for row in rows}
+
     @staticmethod
     def _transport_problems(
         quote: Quote, priced: OptionPricingResult
@@ -561,7 +567,11 @@ class QuoteAssemblyService:
             quote_id=quote.id,
             version_number=int(next_number),
             snapshot=_snapshot(
-                quote, priced, readiness, destinations=await self._destination_names(priced)
+                quote,
+                priced,
+                readiness,
+                destinations=await self._destination_names(priced),
+                residences=await self._residence_labels(),
             ),
             currency=headline.currency,
             created_by=actor_id,
@@ -697,6 +707,7 @@ def _snapshot(
     readiness: Readiness,
     *,
     destinations: dict[uuid.UUID, str] | None = None,
+    residences: dict[str, str] | None = None,
 ) -> dict:
     """The whole computed quote as JSON, for reconstructing it years later.
 
@@ -709,12 +720,16 @@ def _snapshot(
     recommended = {o.id: o.is_recommended for o in quote.options}
     order = {o.id: o.sort_order for o in quote.options}
     destinations = destinations or {}
+    residences = residences or {}
     return {
         "quote_number": quote.quote_number,
         "currency": quote.presentation_currency.upper(),
         "arrival_date": quote.arrival_date.isoformat(),
         "departure_date": quote.departure_date.isoformat(),
-        "pax_count": quote.pax_count,
+        # The headcount pricing actually used, not the column: a quote given
+        # cohorts (§3.8) has no ``pax_count``, and a document that reads it off
+        # the row prints "0 participants" on the client's proposal.
+        "pax_count": priced.pax or quote.pax_count,
         "options": [
             {
                 "option_id": str(o.option_id),
@@ -781,6 +796,12 @@ def _snapshot(
                 "cohorts": [
                     {
                         "residence": price.cohort.residence,
+                        # The label the client reads, frozen with the figures.
+                        # The key ("non_resident") is ours; a document that
+                        # prints it is a document that leaks our vocabulary.
+                        "residence_label": residences.get(
+                            price.cohort.residence, price.cohort.residence
+                        ),
                         "traveller_type": price.cohort.traveller_type,
                         "headcount": price.cohort.count,
                         "currency": price.currency,

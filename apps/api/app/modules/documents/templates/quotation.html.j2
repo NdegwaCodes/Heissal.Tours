@@ -504,14 +504,25 @@
 
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:12pt;margin-top:12pt">
     <div class="panel">
-      <div class="cell-label">Complete round-trip group transfers</div>
-      <div style="font-family:var(--font-display);font-size:var(--fs-stat);color:#fff">Included in packages</div>
+      <div class="cell-label">{% if view.transport.add_on %}Optional upgrades{% else %}Complete round-trip group transfers{% endif %}</div>
+      <div style="font-family:var(--font-display);font-size:var(--fs-stat);color:#fff">{{ view.transport.add_on or "Included in packages" }}</div>
     </div>
     <div style="border:1px solid var(--hairline);padding:14pt 16pt">
       <div class="cell-label">Group capacity</div>
       <div style="font-family:var(--font-display);font-size:var(--fs-pax);color:var(--ink);font-variant-numeric:oldstyle-nums">{{ view.transport.capacity }}</div>
     </div>
   </div>
+
+  {% if view.transport.named %}
+  {# Named and never priced: Heissal holds no ticketing licence, so the fare is
+     the client's to book (§3.10). Leaving the flight off the page entirely is
+     how a client turns up without a ticket. #}
+  <div class="notice">
+    <div class="cell-label">Flights are not included</div>
+    {{ view.transport.named | join("; ") }} &mdash; to be booked directly by you.
+    Airport transfers on arrival and departure are arranged as above.
+  </div>
+  {% endif %}
 
   <p style="margin-top:14pt">Final transport scheduling will be coordinated around the
   confirmed itinerary and accommodation selection.</p>
@@ -560,10 +571,16 @@
     {% if option.is_recommended %}<span class="chip">&#9733; Recommended</span>{% endif %}
   </div>
 
-  <div class="option-hero">
+  {# A package page gives 24mm of its photograph back to the itinerary table:
+     the legs have to fit on the same page as the price they belong to, and a
+     table continued overleaf is a table nobody reads. #}
+  <div class="option-hero"{% if option.itinerary | length > 1 %} style="height:38mm"{% endif %}>
     {% if option.hero %}<img src="{{ option.hero.url }}" alt="{{ option.hero.alt }}">{% endif %}
   </div>
-  {% if option.gallery %}
+  {# A package's page spends its space on the itinerary instead: the legs are
+     what the client cannot get anywhere else on the document, and four
+     thumbnails plus a six-row table does not fit A4. #}
+  {% if option.gallery and option.itinerary | length <= 1 %}
   <div class="gallery" style="grid-template-columns:repeat({{ option.gallery | length }},1fr)">
     {% for image in option.gallery %}<div><img src="{{ image.url }}" alt="{{ image.alt }}"></div>{% endfor %}
   </div>
@@ -596,6 +613,24 @@
         <div class="cell-label">Total group price</div>
         <div class="amount">{{ option.group_total }}</div>
       </div>
+      {% if option.cohorts %}
+      {# A mixed group has no single per-person figure — residents and
+         non-residents are charged different rates in different currencies
+         (§3.8) — so without these rows such a client sees a group total and
+         nothing else. Stacked rather than tabulated: this column is .88fr of
+         the page, and two money columns would leave the label three
+         characters wide. #}
+      <div class="included" style="margin-top:8pt">
+        <div class="cell-label">Per traveller</div>
+        {% for cohort in option.cohorts %}
+        <div style="margin-top:7pt">
+          <div class="cell-label" style="color:var(--ink-soft)">{{ cohort.label }}{% if cohort.headcount %} &middot; {{ cohort.headcount }}{% endif %}</div>
+          <div class="cell-value">{{ cohort.per_person }}</div>
+          <div class="cell-label">{{ cohort.total }} in total</div>
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
       <div class="included">
         <div class="cell-label">Included</div>
         <ul class="ticks">
@@ -605,6 +640,38 @@
       <p class="serif-note" style="margin-top:7pt">{{ view.config.vat_note }}.</p>
     </div>
   </div>
+
+  {% if option.itinerary | length > 1 %}
+  {# Full width, below the two columns: a package's facts panel describes its
+     first leg only, so the legs are what actually answer "what am I buying"
+     (§3.9), and six columns do not fit a half-width panel. Printed only past
+     one leg — for a single hotel the panel above has already said it. #}
+  <div class="eyebrow" style="margin-top:14pt">The itinerary</div>
+  <table style="margin-top:8pt">
+    <thead>
+      <tr>
+        <th>Leg</th>
+        <th>Where</th>
+        <th>Property</th>
+        <th>Nights</th>
+        <th>Room</th>
+        <th>Board</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for leg in option.itinerary %}
+      <tr>
+        <td>{{ leg.step }}</td>
+        <td>{{ leg.destination }}</td>
+        <td class="property">{{ leg.property_name }}</td>
+        <td>{{ leg.nights }}</td>
+        <td>{{ leg.room }}</td>
+        <td>{{ leg.board }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
   <div class="spacer"></div>
   <div class="page-foot"><span>{{ view.quote_number }}</span><span>Option {{ option.number }}</span></div>
 </section>
@@ -614,7 +681,7 @@
 {% if view.comparison %}
 <section class="page">
   <div class="eyebrow">Comparison</div>
-  <h1>At a Glance — Accommodation Options</h1>
+  <h1>At a Glance — Package Options</h1>
 
   <table style="margin-top:14pt">
     <thead>
@@ -632,6 +699,9 @@
       <tr{% if row.is_recommended %} class="recommended"{% endif %}>
         <td class="property">
           {% if row.is_recommended %}<span class="chip chip-soft" style="display:block;width:max-content;margin-bottom:4pt">Recommended</span>{% endif %}{{ row.name }}
+          {# The route, not another column: it is what tells two packages apart
+             when they share their first property (§3.9). #}
+          {% if row.route and row.route != row.name %}<div class="cell-label" style="margin-top:3pt">{{ row.route }}</div>{% endif %}
         </td>
         <td>{{ row.rooming }}</td>
         <td>{{ row.meal_plan }}</td>

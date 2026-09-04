@@ -958,3 +958,46 @@ cost is an add-on sold at a loss. The cost stays internal; the client sees the p
 A transfer tariff is keyed on its route, and one route is not another: town-to-terminus is not
 terminus-to-hotel. Where the named route has no rate the nearest row is used and **said out
 loud**, because a plausible figure for the wrong drive is the error nobody goes looking for.
+
+**An option is identified by its option id, never by its property** (Stage 3.11, 2026-09-04)
+Two curated packages can share their lead hotel and differ on a later leg, so `accommodation_id`
+stopped being a key at 3.9. Issuing used it to find the recommended option's headline money, to
+map each costing back to its option row and to stamp the recommendation and sort order into the
+snapshot — so a quote with two packages starting at the same property could take its headline
+price and margin from the wrong one, and the mapping dict collapsed both onto a single row.
+
+**What a version freezes now includes the itinerary and the journey** (Stage 3.11, 2026-09-04)
+Legs (destination and property *by name*, room, board, nights), each cohort's per-person and
+total in its own currency with the conversion rates used, the residence categories' display
+names, the headcount pricing actually used, and the journey's movements. Denormalised for the
+reason the rest of the snapshot is: a destination renamed or a rate superseded must not change
+what a version says was quoted, and the rate on file today is not the rate the client was
+quoted at.
+
+The transport page previously read the quote's **live** segments, so a document already sent
+could quietly start describing a different journey. It renders from the frozen version, and a
+version issued before this change simply has no transport page — honest, and better than a page
+of what the quote looks like today.
+
+**The headcount is frozen, not read off `pax_count`** (Stage 3.11, 2026-09-04)
+A quote given cohorts has no `pax_count` at all — the vector *is* the headcount (§3.8) — so
+everything downstream that reached for the column read zero, and the client's proposal said
+"0 participants" beside a price for four people. `build_group` is the one place that decides
+who is travelling, so its answer is what the version records.
+
+**What the document does with a package** (Stage 3.11, 2026-09-04)
+A full-width itinerary table under the two columns, printed only past one leg: for a single
+hotel the facts panel has already said it. The route, not another column, in the comparison
+table's property cell — it is what tells two packages apart when they share a first property,
+and a seventh column does not fit A4. Verified by rendering: the page overflowed until the
+"Itinerary" fact cell (a third copy of the same route) went, the gallery strip was dropped from
+package pages and their hero gave back 24mm. A table continued overleaf is a table nobody reads.
+
+Per-cohort prices are a **stacked list in the price panel**, not a three-column table: that
+column is .88fr of the page and two money columns leave the label three characters wide. Shown
+only where there are two or more cohorts — one cohort would repeat the per-person figure printed
+in large type immediately above it.
+
+Repeated movements are **counted, not listed**: a rail return with its four mandatory transfers
+is six movements and two distinct routes, and a page that prints "Terminus to hotel — Included"
+four times reads as a bug rather than as thoroughness.

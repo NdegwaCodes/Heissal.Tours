@@ -49,7 +49,7 @@ from app.modules.clients.models import Client
 from app.modules.destinations.models import Destination
 from app.modules.documents.config import DocumentConfig
 from app.modules.media.models import DestinationImage, PropertyImage
-from app.modules.quotes.models import Quote, QuoteTransportSegment, QuoteVersion
+from app.modules.quotes.models import Quote, QuoteVersion
 
 # How a meal-plan code reads on a document. Presentation of a stored code, not a
 # business rule: the plan's own name is used when the catalogue has one, and this
@@ -96,6 +96,35 @@ class Image:
     alt: str
 
 
+@dataclass(frozen=True)
+class ItineraryLeg:
+    """One stay within a package, as it reads on the document (§3.9, §3.11)."""
+
+    step: str
+    destination: str
+    property_name: str
+    nights: str
+    room: str
+    board: str
+
+
+@dataclass(frozen=True)
+class CohortPriceView:
+    """What one group of travellers pays, in their own currency (§3.8).
+
+    The reason this exists on the document at all: a group of residents and
+    non-residents has no single per-person figure — they are charged different
+    rates in different currencies — so ``per_person`` above is deliberately
+    NULL for them, and without these rows such a client sees a group total and
+    nothing else.
+    """
+
+    label: str
+    headcount: str
+    per_person: str
+    total: str
+
+
 @dataclass
 class OptionView:
     """One accommodation option, as the client sees it."""
@@ -115,11 +144,20 @@ class OptionView:
     # Printed as an italic aside where the option is not directly comparable
     # with the others — the reference proposal does exactly this for its villas.
     comparability_note: str | None = None
+    # The legs of a curated package, in itinerary order. A single-property
+    # option has one, and the template prints the table only past that: the
+    # facts panel already says everything a one-hotel option has to say.
+    itinerary: list[ItineraryLeg] = field(default_factory=list)
+    # "Diani → Maasai Mara", for the comparison table and the option heading.
+    route: str = ""
+    # Per-cohort prices where the group is not uniform (§3.8).
+    cohorts: list[CohortPriceView] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
 class ComparisonRow:
     name: str
+    route: str
     rooming: str
     meal_plan: str
     transport: str
@@ -148,6 +186,13 @@ class TransportView:
     legs: list[TransferLeg]
     capacity: str
     hero: Image | None = None
+    # How the journey reads in one cell of the comparison table.
+    label: str = ""
+    # Flights: named, never priced, because Heissal holds no ticketing licence
+    # (§3.10). Printed as something for the client to book, not as a charge.
+    named: list[str] = field(default_factory=list)
+    # What the optional upgrades sell for, if any were quoted.
+    add_on: str | None = None
 
 
 @dataclass
@@ -202,7 +247,14 @@ class QuotationViewBuilder:
         nights = self._nights(quote)
         client = await self.db.get(Client, quote.client_id)
         destination = await self._destination(quote)
-        transport = await self._transport(quote, pax, destination)
+        # From the snapshot, not from the live segments: an issued document has
+        # to keep describing the journey it was issued with, and segments can be
+        # edited afterwards. A version frozen before §3.11 has no journey in it
+        # and gets no transport page, which is the honest outcome — better than
+        # a page of what the quote looks like today.
+        transport = await self._transport(
+            snapshot.get("transport") or {}, pax, destination, currency
+        )
 
         raw_options = sorted(
             snapshot.get("options", []), key=lambda o: o.get("sort_order") or 0
@@ -234,7 +286,7 @@ class QuotationViewBuilder:
             intro_paragraphs=self._intro(config, pax, len(options), destination),
             glance=self._glance(pax, nights, destination, options, transport, config),
             options=options,
-            comparison=self._comparison(options, transport is not None),
+            comparison=self._comparison(options, transport),
             rejected=[
                 RejectedView(name=r["name"], reason=r["reason"])
                 for r in snapshot.get("rejected", [])
@@ -269,7 +321,10 @@ class QuotationViewBuilder:
             Fact("Group size", f"{pax} participants"),
         ]
         if rooms:
-            facts.append(Fact("Rooms required", f"{rooms} rooms"))
+            count = int(rooms)
+            facts.append(
+                Fact("Rooms required", f"{count} room" + ("s" if count > 1 else ""))
+            )
         if nights:
             facts.append(Fact("Nights", f"{nights} nights"))
         if has_transport:
@@ -285,6 +340,46 @@ class QuotationViewBuilder:
         if has_transport:
             included.append("Complete group transfers")
         included.append(f"{config.company_name} coordination")
+
+        legs = sorted(
+            raw.get("legs") or [], key=lambda leg: leg.get("sequence") or 0
+        )
+        itinerary = [
+            ItineraryLeg(
+                step=f"{index:02d}",
+                destination=str(leg.get("destination_name") or ""),
+                property_name=str(leg.get("accommodation_name") or ""),
+                nights=self._nights_phrase(leg.get("nights")),
+                room=str(leg.get("room_type_name") or ""),
+                # The plan for this leg, which for a package is a choice and
+                # not a compromise: a day out of the hotel makes half board the
+                # right board (§3.9). The fallback reason stays internal.
+                board=str(leg.get("meal_plan_name") or leg.get("meal_plan_code") or ""),
+            )
+            for index, leg in enumerate(legs, start=1)
+        ]
+        route = " → ".join(
+            one.destination or one.property_name for one in itinerary
+        )
+        # No "Itinerary" fact cell: the heading already names the properties and
+        # the table below lists the legs, so a third copy of the same route cost
+        # three lines of a page that has to fit A4.
+
+        cohorts = [
+            CohortPriceView(
+                label=self._cohort_label(row),
+                headcount=self._people_phrase(row.get("headcount")),
+                per_person=money(row.get("per_person"), str(row.get("currency") or ""))
+                or "",
+                total=money(row.get("total"), str(row.get("currency") or "")) or "",
+            )
+            for row in raw.get("cohorts") or []
+        ]
+        if len(cohorts) < 2:
+            # One cohort means a uniform group, and the panel would repeat the
+            # per-person figure printed in large type immediately above it.
+            # These rows exist for the group that has no single figure.
+            cohorts = []
 
         hero, gallery = await self._property_images(accommodation_id)
         blurb = await self._blurb(accommodation_id)
@@ -311,27 +406,70 @@ class QuotationViewBuilder:
             hero=hero,
             gallery=gallery,
             comparability_note=note,
+            itinerary=itinerary,
+            route=route,
+            cohorts=cohorts,
         )
 
+    @staticmethod
+    def _nights_phrase(nights: Any) -> str:
+        count = int(nights or 0)
+        return "" if not count else f"{count} night" + ("s" if count > 1 else "")
+
+    @staticmethod
+    def _people_phrase(headcount: Any) -> str:
+        count = int(headcount or 0)
+        return "" if not count else f"{count} traveller" + ("s" if count > 1 else "")
+
+    @staticmethod
+    def _cohort_label(row: dict) -> str:
+        """"Kenyan citizens · children" — the label, never our own key.
+
+        The residence *name* is frozen into the snapshot beside the figures for
+        exactly this: printing ``non_resident`` on a proposal leaks how we
+        store things into what a client reads.
+        """
+        residence = str(row.get("residence_label") or row.get("residence") or "")
+        kind = str(row.get("traveller_type") or "").strip()
+        if kind and kind != "adult":
+            return f"{residence} · {kind}ren" if kind == "child" else (
+                f"{residence} · {kind}s"
+            )
+        return residence
+
     def _comparison(
-        self, options: list[OptionView], has_transport: bool
+        self, options: list[OptionView], transport: TransportView | None
     ) -> list[ComparisonRow]:
-        """The at-a-glance table, cheapest first.
+        """The curated package × transport table, cheapest first (§3.11).
 
         Sorted by price rather than by the option order used for the individual
         pages, which is what the reference proposal does: the pages lead with the
         recommendation, the table lets a client scan on cost.
+
+        The route column is what makes this a *package* comparison rather than a
+        hotel one. Two packages can share their first property and differ two
+        legs later, so a table keyed on the property name alone would show a
+        client two rows they cannot tell apart.
+
+        Transport reads the same in every row on purpose — it is the same
+        journey whichever package is chosen — and saying so once per row is
+        what stops a client reading the cheapest bed as the cheapest trip.
         """
         rows = [
             ComparisonRow(
                 name=option.name,
+                route=option.route,
                 rooming=next(
                     (f.value for f in option.facts if f.label == "Accommodation"), ""
                 ),
                 meal_plan=next(
                     (f.value for f in option.facts if f.label == "Meal plan"), ""
                 ),
-                transport="Group transfers" if has_transport else "Not included",
+                transport=(
+                    transport.label or transport.heading
+                    if transport is not None
+                    else "Not included"
+                ),
                 per_person=option.per_person,
                 group_total=option.group_total,
                 is_recommended=option.is_recommended,
@@ -428,45 +566,86 @@ class QuotationViewBuilder:
     # -- transport ----------------------------------------------------------- #
 
     async def _transport(
-        self, quote: Quote, pax: int, destination: Destination | None
+        self,
+        journey: dict,
+        pax: int,
+        destination: Destination | None,
+        currency: str,
     ) -> TransportView | None:
-        """Describe the transport legs the quote actually carries.
+        """Describe the journey the quote was issued with (§3.10, §3.11).
 
-        Only described, never priced here: the reference proposal shows no
-        per-leg figure, and the transfer tariffs are Stage 3.8. A quote with no
-        segments gets no transport page rather than a page of assumptions.
+        Described and never priced per leg: the movements' fares are what we
+        pay, and their total is already inside every option's figure. What the
+        client needs from this page is what is being arranged for them, which
+        of it is an optional upgrade and what it costs, and which tickets are
+        theirs to buy.
+
+        A quote with no movements gets no transport page rather than a page of
+        assumptions — a proposal describing transfers the client is not getting
+        is worse than one that stays quiet.
         """
-        segments = sorted(quote.transport_segments, key=lambda s: s.sequence)
-        if not segments:
+        movements = sorted(
+            journey.get("movements") or [], key=lambda m: m.get("sequence") or 0
+        )
+        named = [str(one) for one in journey.get("named") or []]
+        if not movements and not named:
             return None
+
+        # Counted, not listed one by one. A return rail journey with its four
+        # mandatory transfers is six movements and two distinct routes, and a
+        # page that prints "Terminus to hotel — Included" four times reads as a
+        # bug rather than as thoroughness.
+        counted: dict[tuple[str, str], int] = {}
+        for one in movements:
+            key = (
+                str(one.get("label") or "").strip() or self._movement_label(one),
+                "Optional upgrade" if one.get("is_optional") else "Included",
+            )
+            counted[key] = counted.get(key, 0) + 1
         legs = [
             TransferLeg(
-                route=segment.description or self._leg_label(segment),
-                note=("Optional extra" if segment.is_optional else "Included"),
+                route=route if count == 1 else f"{route} × {count}", note=note
             )
-            for segment in segments
+            for (route, note), count in counted.items()
         ]
-        modes = sorted({s.mode.upper() for s in segments})
+        # Flights sit in the same list, marked as the client's to book: leaving
+        # them off the page entirely is how a client turns up without a ticket.
+        legs.extend(TransferLeg(route=one, note="Booked by you") for one in named)
+        modes = sorted({str(one.get("mode") or "").upper() for one in movements})
+        add_on = Decimal(str(journey.get("optional_price") or "0"))
         return TransportView(
-            heading=" + ".join(modes),
+            heading=" + ".join(modes) if modes else "Air",
             summary=(
                 "To keep the group travelling together comfortably, transport is "
                 "arranged as a complete door-to-door journey, and the same in "
                 "reverse."
             ),
-            route_label=" → ".join(self._leg_label(s) for s in segments),
+            # The distinct routes, in order — the same de-duplication as above,
+            # for the same reason.
+            route_label=" → ".join(dict.fromkeys(leg.route for leg in legs)),
             legs=legs,
             capacity=f"{pax} pax",
             hero=await self._cover(destination) if destination else None,
+            label=self._journey_label(modes, named),
+            named=named,
+            add_on=money(add_on, currency) if add_on > 0 else None,
         )
 
     @staticmethod
-    def _leg_label(segment: QuoteTransportSegment) -> str:
-        kind = "Transfer" if segment.kind == "transfer" else "Line haul"
-        parts = [kind, segment.mode.upper()]
-        if segment.travel_class:
-            parts.append(segment.travel_class.title())
-        return " · ".join(parts)
+    def _movement_label(movement: dict) -> str:
+        kind = "Transfer" if movement.get("kind") == "transfer" else "Line haul"
+        return f"{kind} · {str(movement.get('mode') or '').upper()}"
+
+    @staticmethod
+    def _journey_label(modes: list[str], named: list[str]) -> str:
+        """The journey in one cell of the comparison table."""
+        words = [mode.title() for mode in modes]
+        if not words:
+            return "Flights booked by you"
+        joined = words[0] if len(words) == 1 else " and ".join(
+            (", ".join(words[:-1]), words[-1])
+        )
+        return f"{joined} transfers" + (" · flights excluded" if named else "")
 
     # -- signature experiences ------------------------------------------------ #
 

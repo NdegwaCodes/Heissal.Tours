@@ -281,6 +281,11 @@ class OptionPricingResult:
     # journey whichever hotel is chosen, and holding it per option would invite
     # someone to make it differ. Its total is inside every option's build-up.
     transport: TransportCosting = field(default_factory=lambda: TransportCosting())
+    # How many people are travelling, as :mod:`app.modules.quotes.group`
+    # decided it — cohorts, else pax_count, else the traveller rows. Carried
+    # out of pricing because a quote given cohorts has no ``pax_count`` at all,
+    # and anything downstream that reaches for that column reads zero.
+    pax: int = 0
 
 
 # --------------------------------------------------------------------------- #
@@ -333,7 +338,7 @@ class OptionPricingService:
                 uniform_group=group.is_uniform,
             ).group_total
 
-        result = OptionPricingResult(transport=transport)
+        result = OptionPricingResult(transport=transport, pax=group.pax)
         for option in sorted(quote.options, key=lambda o: o.sort_order):
             await self._price_one(
                 quote,

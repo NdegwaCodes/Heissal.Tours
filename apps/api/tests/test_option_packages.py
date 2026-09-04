@@ -18,20 +18,10 @@ from datetime import date
 from decimal import Decimal
 
 import pytest
-import pytest_asyncio
-from sqlalchemy import select
 
 from app.core.config import settings
 from app.db.session import AsyncSessionLocal
-from app.modules.accommodations.models import (
-    Accommodation,
-    AccommodationRate,
-    MealPlan,
-    RoomType,
-)
-from app.modules.destinations.models import Destination
-from app.modules.quotes.models import Quote, QuoteOption, QuoteOptionLeg
-from app.modules.residence.models import ResidenceCategory
+from app.modules.quotes.models import Quote
 from tests.conftest import unique_email
 
 API = settings.API_V1_STR
@@ -41,116 +31,6 @@ D = Decimal
 # Nairobi 1 night, then the upcountry lodge 2 — three nights, 1 to 4 July.
 ARRIVAL, DEPARTURE = "2026-07-01", "2026-07-04"
 SWITCH = "2026-07-02"
-SEASON_FROM, SEASON_TO = date(2026, 1, 1), date(2026, 12, 31)
-LODGE_TWIN = D("18000")
-
-
-@pytest_asyncio.fixture(loop_scope="session")
-async def upcountry_lodge():
-    """A lodge in its own destination, so a package can have two real legs."""
-    tag = uuid.uuid4().hex[:8]
-    async with AsyncSessionLocal() as db:
-        fb = (
-            await db.execute(select(MealPlan).where(MealPlan.code == "FB"))
-        ).scalar_one()
-        bb = (
-            await db.execute(select(MealPlan).where(MealPlan.code == "BB"))
-        ).scalar_one()
-        citizen = (
-            await db.execute(
-                select(ResidenceCategory).where(ResidenceCategory.key == "citizen")
-            )
-        ).scalar_one()
-        where = Destination(
-            name=f"Package Highlands {tag}", slug=f"package-highlands-{tag}", type="park"
-        )
-        db.add(where)
-        await db.flush()
-        lodge = Accommodation(
-            name=f"Highland Lodge {tag}",
-            slug=f"highland-lodge-{tag}",
-            destination_id=where.id,
-            category="lodge",
-        )
-        db.add(lodge)
-        await db.flush()
-        room = RoomType(
-            accommodation_id=lodge.id, name="Hill Twin", code="HTW", max_occupancy=2
-        )
-        db.add(room)
-        await db.flush()
-        for plan, twin in ((fb, LODGE_TWIN), (bb, LODGE_TWIN - D("4000"))):
-            for occupancy, amount in ((2, twin), (1, twin * D("0.7"))):
-                db.add(
-                    AccommodationRate(
-                        accommodation_id=lodge.id,
-                        room_type_id=room.id,
-                        meal_plan_id=plan.id,
-                        residence_category_id=citizen.id,
-                        season_name="standard",
-                        occupancy=occupancy,
-                        effective_from=SEASON_FROM,
-                        effective_to=SEASON_TO,
-                        currency="KES",
-                        rate_per_night=amount,
-                        rate_kind="sto",
-                    )
-                )
-        # A property with NO rates, so a leg pointing at it genuinely cannot be
-        # priced. Chui Festive Camp will not do: its four-night minimum binds
-        # only in the festive season, so a July leg prices happily.
-        bare = Accommodation(
-            name=f"Rateless Camp {tag}",
-            slug=f"rateless-camp-{tag}",
-            destination_id=where.id,
-            category="camp",
-        )
-        db.add(bare)
-        await db.flush()
-        await db.commit()
-        ids = {
-            "destination_id": str(where.id),
-            "accommodation_id": str(lodge.id),
-            "rateless_id": str(bare.id),
-            "meal_plan_fb": str(fb.id),
-            "meal_plan_bb": str(bb.id),
-        }
-
-    yield ids
-
-    async with AsyncSessionLocal() as db:
-        # A package's option row points at its FIRST property, so the lodge is
-        # reachable only through the leg rows. Matching on the option alone left
-        # quotes behind that held a reference to the room type.
-        mine = [uuid.UUID(ids["accommodation_id"]), uuid.UUID(ids["rateless_id"])]
-        via_option = (
-            await db.execute(
-                select(QuoteOption.quote_id).where(
-                    QuoteOption.accommodation_id.in_(mine)
-                )
-            )
-        ).scalars().all()
-        via_leg = (
-            await db.execute(
-                select(QuoteOption.quote_id)
-                .join(QuoteOptionLeg, QuoteOptionLeg.quote_option_id == QuoteOption.id)
-                .where(QuoteOptionLeg.accommodation_id.in_(mine))
-            )
-        ).scalars().all()
-        for quote_id in set(via_option) | set(via_leg):
-            row = await db.get(Quote, quote_id)
-            if row is not None:
-                await db.delete(row)
-        await db.flush()
-        for key in ("accommodation_id", "rateless_id"):
-            row = await db.get(Accommodation, uuid.UUID(ids[key]))
-            if row is not None:
-                await db.delete(row)
-        await db.flush()
-        where_row = await db.get(Destination, uuid.UUID(ids["destination_id"]))
-        if where_row is not None:
-            await db.delete(where_row)
-        await db.commit()
 
 
 def _h(tokens):
