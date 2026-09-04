@@ -79,6 +79,14 @@ class PricingConfig(BaseModel):
     # and the kind that changes the first time one complains.
     max_drive_minutes_per_day: int = Field(default=600, ge=60)
 
+    # --- Stage 7.1 booking terms ------------------------------------------- #
+    # What a client pays to hold a trip, and when the rest is due. Commercial
+    # terms, so they are config — and they are resolved to dated instalments at
+    # the moment of booking, which is what freezes them: changing the deposit
+    # rule next month must not restate an invoice already sent.
+    deposit_pct: Decimal = Field(default=Decimal("30"), gt=0, le=100)
+    balance_due_days_before_travel: int = Field(default=30, ge=0)
+
     def rounding_for(self, currency: str) -> Decimal:
         """The per-person rounding step for one currency.
 

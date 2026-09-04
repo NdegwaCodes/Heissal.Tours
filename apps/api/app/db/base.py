@@ -23,6 +23,12 @@ from app.modules.activities.models import (  # noqa: F401
 )
 from app.modules.audit.models import AuditLog  # noqa: F401
 from app.modules.auth.models import RefreshToken  # noqa: F401
+from app.modules.bookings.models import (  # noqa: F401
+    Booking,
+    BookingCounter,
+    BookingInstalment,
+    Payment,
+)
 from app.modules.clients.models import Client  # noqa: F401
 from app.modules.currency.models import Currency, ExchangeRate  # noqa: F401
 from app.modules.destinations.models import Destination  # noqa: F401
@@ -80,6 +86,10 @@ __all__ = [
     "AccommodationSupplement",
     "MealPlan",
     "RoomType",
+    "Booking",
+    "BookingCounter",
+    "BookingInstalment",
+    "Payment",
     "Lead",
     "LeadStage",
     "LeadStageEvent",

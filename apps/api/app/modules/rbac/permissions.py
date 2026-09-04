@@ -87,6 +87,13 @@ PERMISSIONS: dict[str, str] = {
     # built on them come from these two endpoints, and a quote marked accepted
     # by mistake is a booking somebody expects to happen.
     "quote:record_outcome": "Record that a client accepted or declined a quote",
+    # --- Stage 7.1: where an accepted quote leads ---
+    "booking:read": "View bookings, their schedules and what is owed",
+    "booking:manage": "Create, cancel and complete bookings",
+    # Its own permission: recording money is the act every audit turns on, and
+    # the person who books a trip is not always the person who reconciles the
+    # bank statement.
+    "booking:record_payment": "Record payments received against a booking",
 }
 
 # Reference read/manage permission keys, grouped for role assignment.

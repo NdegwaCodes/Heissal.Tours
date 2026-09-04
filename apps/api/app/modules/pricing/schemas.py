@@ -34,6 +34,9 @@ class PricingConfigRead(BaseModel):
     # the reason every other threshold here is: configurable in name only is
     # not configurable.
     max_drive_minutes_per_day: int
+    # Booking terms (§7.1): what holds a trip, and when the rest is due.
+    deposit_pct: Decimal
+    balance_due_days_before_travel: int
 
 
 class PricingConfigUpdate(BaseModel):
@@ -57,6 +60,8 @@ class PricingConfigUpdate(BaseModel):
     min_self_catering_options: int | None = Field(default=None, ge=0)
     max_self_catering_options: int | None = Field(default=None, ge=0)
     max_drive_minutes_per_day: int | None = Field(default=None, ge=60)
+    deposit_pct: Decimal | None = Field(default=None, gt=0, le=100)
+    balance_due_days_before_travel: int | None = Field(default=None, ge=0)
 
 
 class ConversionRead(BaseModel):

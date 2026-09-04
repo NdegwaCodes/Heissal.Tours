@@ -360,9 +360,23 @@ the group total derived from it so the two always reconcile.
 ## Stage 6 — Public Website  ☐
 - Packages · Destinations · Accommodation · Activities · SEO · Lead capture · Custom safari builder
 
-## Stage 7 — Booking + Client Portal  ☐
-- Quote acceptance · Booking · Payment schedules · M-Pesa/payment integration
-- Client login · Documents · Online itinerary
+## Stage 7 — Booking + Client Portal  ◑
+- ☑ 7.1 **Bookings, schedules and payments** (`app/modules/bookings/`, migration `65fd3c1a37bf`,
+  39 tests) — where an accepted quote leads. Until now a deal could be won in the system and
+  operations picked it up in a spreadsheet
+  - Booked against the **version**, not the quote, so re-pricing afterwards cannot move the total
+    (there is a test that re-prices and asserts it does not)
+  - The schedule is **dated invoice lines** resolved from config at the moment of booking, so
+    changing the deposit rule later cannot restate an invoice already sent. Instalments sum to the
+    total exactly; a late booking is one payment, not two
+  - Payments are recorded and applied **oldest first**, never matched: real payments do not line
+    up. A payment in another currency is refused rather than converted
+  - Confirming happens on the **deposit** — that is what a deposit buys — and `GET /bookings/due`
+    is the operations equivalent of the leads' morning list
+  - **No cancellation charge is computed**: that ladder is commercial policy nobody has given us
+- ☐ **Needs the client:** the cancellation/refund ladder (what is retained, how close to travel)
+- ☐ M-Pesa / payment integration — lands behind the `payments` rows, which are the seam
+- ☐ Client login · documents · online itinerary
 
 ## Stage 8 — Operations  ☐
 - Vehicles · Drivers · Guides · Trip assignments · GPS integration · Fuel/mileage · Supplier management

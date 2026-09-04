@@ -346,3 +346,89 @@ async def test_rooming_partitions_by_residency_not_by_headcount(
     assert group.rooming(2) == {"citizen": [2, 1], "non_resident": [2, 1]}
     # The naive figure, for contrast: six people in twins is three rooms.
     assert -(-group.pax // 2) == 3
+
+
+async def test_the_cohorts_come_back_in_one_deterministic_order(
+    client, admin_tokens, sample_catalogue
+):
+    """Whatever order they were typed in, the vector reads the same way.
+
+    Not decoration: this order is the order of the per-traveller rows on a
+    client proposal (§3.8), and it is frozen into the version — so an unstable
+    one means the same quote lists residents first today and visitors first
+    tomorrow. It *was* unstable, and ordering by the primary key does not fix
+    it: a UUIDv7 carries a millisecond and ten random bytes, so two cohorts
+    inserted in the same millisecond sort arbitrarily. A §7.1 test run found
+    it.
+
+    The order is the residency's own sort_order, then adult, child, infant.
+    """
+    h, ids = _h(admin_tokens), sample_catalogue
+    # Typed in deliberately awkward order: visitors first, children before
+    # adults within each residency.
+    typed = [
+        ("residence_non_resident", "child", 1),
+        ("residence_citizen", "child", 2),
+        ("residence_non_resident", "adult", 2),
+        ("residence_citizen", "adult", 3),
+    ]
+    first = await _priced_cohorts(client, h, ids, typed)
+    # And again, in the reverse order, on a second quote.
+    second = await _priced_cohorts(client, h, ids, list(reversed(typed)))
+
+    reads = [(row["residence"], row["traveller_type"]) for row in first]
+    assert reads == [
+        ("citizen", "adult"),
+        ("citizen", "child"),
+        ("non_resident", "adult"),
+        ("non_resident", "child"),
+    ], reads
+    assert [
+        (row["residence"], row["traveller_type"]) for row in second
+    ] == reads
+
+
+async def _priced_cohorts(client, h, ids, cohorts):
+    """Price a quote with these cohorts and return its cohort rows."""
+    record = await client.post(
+        f"{API}/clients",
+        headers=h,
+        json={
+            "name": f"Order Co {uuid.uuid4().hex[:8]}",
+            "email": unique_email("cohortorder"),
+            "residence_category_id": ids["residence_citizen"],
+        },
+    )
+    assert record.status_code == 201, record.text
+    created = await client.post(
+        f"{API}/quotes",
+        headers=h,
+        json={
+            "client_id": record.json()["id"],
+            "presentation_currency": "KES",
+            "residence_category_id": ids["residence_citizen"],
+            "arrival_date": "2026-07-01",
+            "departure_date": "2026-07-04",
+            "requested_meal_plan_id": ids["meal_plan_fb"],
+            "cohorts": [
+                {
+                    "residence_category_id": ids[residence],
+                    "traveller_type": kind,
+                    "headcount": n,
+                }
+                for residence, kind, n in cohorts
+            ],
+            "options": [
+                {
+                    "accommodation_id": ids["acc_sto_full_board"],
+                    "is_recommended": True,
+                }
+            ],
+        },
+    )
+    assert created.status_code == 201, created.text
+    priced = await client.post(
+        f"{API}/quotes/{created.json()['id']}/options/price", headers=h
+    )
+    assert priced.status_code == 200, priced.text
+    return priced.json()["options"][0]["cohorts"]

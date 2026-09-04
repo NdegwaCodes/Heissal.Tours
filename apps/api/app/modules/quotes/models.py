@@ -192,6 +192,10 @@ class Quote(UUIDPKMixin, TimestampMixin, Base):
         back_populates="quote",
         lazy="selectin",
         cascade="all, delete-orphan",
+        # Creation order, for the same reason as the cohorts below: the group
+        # vector falls back to these rows when there are no cohorts (§3.8), so
+        # their order can reach a document too.
+        order_by="QuoteTraveller.id",
         foreign_keys="QuoteTraveller.quote_id",
     )
     legs: Mapped[list[QuoteLeg]] = relationship(
@@ -207,6 +211,7 @@ class Quote(UUIDPKMixin, TimestampMixin, Base):
         back_populates="quote",
         lazy="selectin",
         cascade="all, delete-orphan",
+        order_by="QuoteTransport.id",
         foreign_keys="QuoteTransport.quote_id",
     )
     options: Mapped[list[QuoteOption]] = relationship(
@@ -236,6 +241,14 @@ class Quote(UUIDPKMixin, TimestampMixin, Base):
         back_populates="quote",
         lazy="selectin",
         cascade="all, delete-orphan",
+        # By the PK, which for a UUIDv7 is roughly creation order — and only
+        # roughly: it carries a millisecond timestamp and ten random bytes, so
+        # two cohorts inserted in the same millisecond sort arbitrarily. This
+        # is here for a stable read, not for the document's order: what decides
+        # that is `app.modules.quotes.group._ordered`, which sorts by the
+        # residency's own sort_order and the traveller type. See it for why an
+        # unstable order reached the client.
+        order_by="QuoteCohort.id",
         foreign_keys="QuoteCohort.quote_id",
     )
 

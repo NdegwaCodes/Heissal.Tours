@@ -1410,3 +1410,82 @@ under "other" — after which the report is worthless anyway.
 **`lead:configure_pipeline` is separate from `lead:manage`.** An agent moves leads through the
 pipeline; a manager decides what the pipeline is. Reordering the stages changes what every report
 means.
+
+**An accepted quote used to lead nowhere** (Stage 7.1, 2026-09-04)
+§5.1 gave a quote an outcome; nothing followed it. A deal could be won in the system and
+operations picked it up in a spreadsheet — no booking, no deposit, no schedule, no record of what
+had been paid. Stage 7.1 is where it leads: `bookings`, `booking_instalments`, `payments`.
+
+**A booking is made against a version, not a quote.** `quote_versions` holds the immutable
+snapshot the client actually received (§3.4); the quote it hangs off keeps changing. So the
+booking points at the version and invoices that version's own selling price — and there is a test
+that re-prices the quote afterwards and asserts the booking's total does not move. A booking whose
+figure could change is not a booking. The dates, headcount and currency are copied onto it for the
+same reason: an operations screen showing different dates because somebody edited the quote would
+be worse than useless.
+
+**Creating one is an act, not a side effect of accepting.** Accepting records a sale; a booking is
+operational. Folding them together would mean every acceptance produced a half-finished
+operational record — and the gap between "they signed" and "we booked it" is exactly what an
+operations queue is made of. One trip cannot be held twice, but a cancelled booking frees the
+quote to be re-booked, because clients come back.
+
+**The schedule is invoice lines, not a percentage.** "30% deposit" is policy; "KES 223,750 due on
+4 September" is what a client pays and what a bank statement is reconciled against. The
+percentages live in the pricing config (`deposit_pct`, `balance_due_days_before_travel`) and are
+resolved to dated rows at the moment of booking — which is what freezes them: changing the deposit
+rule next month must not restate an invoice already sent.
+
+Three arithmetic rules, all tested without a database because these are the figures on an invoice
+and every way they go wrong is silent. **Instalments sum to the total exactly** — the balance is
+the *remainder*, not a second percentage, because two rounded parts of a rounded whole do not add
+up to it and an invoice a cent out is one somebody writes off by hand. **A late booking is one
+payment, not two**: where the balance date has passed the schedule collapses to a single payment
+due today, since an invoice asking for a balance before the deposit gets a form ignored rather
+than corrected. And **a balance never goes negative** — overpayments are real (clients round up,
+pay twice), so the balance floors at zero and the credit is reported separately, because "you owe
+minus four thousand shillings" is not a sentence a client should read.
+
+**Payments are applied oldest first, not matched.** Real payments do not line up: a client sends a
+round 100,000 against a 120,000 deposit, or pays two instalments at once. A system that insisted
+on matching would leave an operator unable to record what the bank plainly shows.
+
+**A payment in another currency is refused, not converted.** What cleared is a fact and the
+exchange rate is a decision, and the decision belongs to whoever reconciles the statement. The
+refusal says exactly that and asks for the amount that reached the account.
+
+**Confirming happens on the deposit, not the balance**, because confirming is telling the
+suppliers it is happening and that is what a deposit buys. Waiting for the balance would mean
+nothing is confirmed until a fortnight before travel.
+
+**No cancellation charge is computed anywhere.** The ladder — "inside 30 days, 50% retained" — is
+commercial policy nobody has given us, and a plausible invented figure on a refund looks as though
+it came from a contract. Cancelling records the reason and leaves what was owed and what was paid
+exactly as they are, which is what the refund conversation actually needs. **This is the next
+thing to ask the client for.**
+
+**No payment integration yet, and the rows are the seam.** M-Pesa will land as `payments` rows
+with their own reference, and an operator will still reconcile against a statement — a booking
+that trusted a callback over a statement is a booking nobody can audit.
+
+**`booking:record_payment` is its own permission**: recording money is the act every audit turns
+on, and the person who books a trip is not always the person who reconciles the bank.
+
+**The cohort order on a client document was database-dependent** (found by §7.1, fixed 2026-09-04)
+`Group.cohorts` decides the order of the per-traveller rows on a proposal (§3.8) and is frozen into
+the version in that order — so an unstable order means the same quote lists residents first today
+and visitors first tomorrow. It was unstable: the relationship had no `order_by`, so the rows came
+back in whatever order Postgres returned. Ordering by the primary key does **not** fix it either,
+which is the part worth recording: `uuid7()` is a 48-bit millisecond timestamp plus ten random
+bytes, so two rows inserted in the same millisecond sort arbitrarily. UUIDv7 is time-ordered
+between milliseconds and unordered within one.
+
+Fixed where the vector is built (`group._ordered`), which is the one place that answers "who is
+travelling" (§3.8): the residency's own `sort_order`, then adult, child, infant. Stable *and*
+meaningful — the order somebody would read them out in — and every figure downstream follows,
+because they all read the vector.
+
+Exposed by a full-suite run of the §7.1 booking tests: the new writes changed which rows landed in
+the same millisecond, and a §3.12 worksheet test that asserts the cohort rows in order started
+failing about one run in two. Worth noting how it surfaced — it had been latent since §3.8, and the
+only reason it was ever visible is that one test asserts on order rather than on a set.

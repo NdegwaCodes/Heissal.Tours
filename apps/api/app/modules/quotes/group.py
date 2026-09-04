@@ -48,7 +48,7 @@ async def build_group(db: AsyncSession, quote: Quote) -> Group:
             )
             for row in quote.cohorts
         ]
-        return _build(counts, categories)
+        return _build(_ordered(counts, categories), categories)
 
     own = _key(categories, quote.residence_category_id)
 
@@ -100,6 +100,50 @@ async def residence_ids(db: AsyncSession, keys: Iterable[str]) -> dict[str, uuid
             f"These residence categories are not in this database: {', '.join(missing)}."
         )
     return found
+
+
+#: The order traveller types are listed in. Adults first because that is how
+#: anybody describes a group, and infants last because they are the exception.
+TRAVELLER_ORDER = ("adult", "child", "infant")
+
+
+def _ordered(
+    counts: list[tuple[str, str, int]],
+    categories: dict[uuid.UUID, ResidenceCategory],
+) -> list[tuple[str, str, int]]:
+    """Cohorts in one deterministic, meaningful order.
+
+    **This is not decoration.** ``Group.cohorts`` decides the order of the
+    per-traveller rows on a client proposal (§3.8) and is frozen into the
+    version in that order, so an unstable order means the same quote can list
+    residents first today and visitors first tomorrow. It was unstable: the
+    rows came back in whatever order Postgres returned, and ordering by the
+    primary key does not fix it either — a UUIDv7 carries a millisecond
+    timestamp and ten random bytes, so two cohorts inserted in the same
+    millisecond sort arbitrarily. A §7.1 test run is what exposed it.
+
+    The order is the residency's own ``sort_order`` (citizen, resident,
+    non-resident as seeded), then the traveller type. Meaningful as well as
+    stable: it is the order somebody would read them out in.
+    """
+    ranks = {
+        category.key: (category.sort_order, category.key)
+        for category in categories.values()
+    }
+    def key(triple: tuple[str, str, int]) -> tuple:
+        residence, traveller_type, _count = triple
+        kind = (
+            TRAVELLER_ORDER.index(traveller_type)
+            if traveller_type in TRAVELLER_ORDER
+            # An unknown type sorts last and alphabetically, rather than
+            # raising: the vector is what the agent typed, and pricing has
+            # better things to say about a bad traveller type than a KeyError
+            # from a sort.
+            else len(TRAVELLER_ORDER)
+        )
+        return (*ranks.get(residence, (10_000, residence)), kind, traveller_type)
+
+    return sorted(counts, key=key)
 
 
 def _build(
