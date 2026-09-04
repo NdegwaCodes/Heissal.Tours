@@ -407,7 +407,13 @@ class QuotationViewBuilder:
             facts=facts,
             included=included,
             per_person=money(raw.get("per_person"), currency),
-            group_total=money(raw.get("group_total"), currency) or "",
+            # The figure the cohort rows below it add up to (§3.6). Older
+            # versions froze only the build-up's own total, so that is the
+            # fallback rather than a blank.
+            group_total=money(
+                raw.get("client_total") or raw.get("group_total"), currency
+            )
+            or "",
             hero=hero,
             gallery=gallery,
             comparability_note=note,

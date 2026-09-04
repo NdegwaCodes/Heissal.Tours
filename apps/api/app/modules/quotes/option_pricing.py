@@ -285,6 +285,30 @@ class OptionCosting:
     # print on one line; a package's real detail is here.
     legs: list[LegCosting] = field(default_factory=list)
 
+    @property
+    def client_total(self) -> Decimal:
+        """What the client is actually billed, in the presentation currency.
+
+        The sum of the cohort totals where the group was priced per cohort,
+        and the whole-group build-up otherwise.
+
+        The two are not always the same number, and where they differ the
+        cohort sum is the true one: each cohort's per-person figure is rounded
+        up **in its own currency** and multiplied back out, so a mixed group
+        that is billed 17,600 a head in shillings and 352 a head in dollars is
+        billed exactly the sum of those, not the whole-group figure rounded
+        once at a different level. The gap is small (120 shillings on a
+        126,000 quote) and its direction does not matter: a document whose
+        cohort rows do not add up to its own total contradicts itself, which is
+        the specific failure §3.6 exists to prevent.
+
+        The whole-group ``build_up`` stays exactly as it is — it is the
+        internal worksheet, and the worksheet shows both figures.
+        """
+        if self.cohort_prices is not None:
+            return self.cohort_prices.group_total
+        return self.build_up.group_total
+
 
 # The one fee type an accommodation option implies. Conservancy, camping and the
 # rest attach to an activity or a leg rather than to a bed, so they are not

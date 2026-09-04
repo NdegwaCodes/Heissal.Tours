@@ -412,3 +412,37 @@ async def test_an_earlier_version_s_worksheet_still_says_what_it_said(
     assert _figure(
         (await _built(quote["id"], version=2)).options[0], "Selling total"
     ) == before + D(40000)
+
+
+async def test_the_worksheet_shows_both_totals_where_they_differ(
+    client, admin_tokens, sample_catalogue
+):
+    """The build-up's figure and what the client is billed.
+
+    They differ by the rounding whenever a group is priced per cohort — each
+    cohort rounds up in its own currency and is multiplied back out — and the
+    gap is the kind of thing somebody reconciling an invoice needs to see
+    rather than rediscover. The client is billed the cohort sum; the proposal
+    shows only that one.
+    """
+    h, ids = _h(admin_tokens), sample_catalogue
+    quote, _ = await _issued(
+        client,
+        h,
+        ids,
+        options=[
+            {"accommodation_id": ids["acc_sto_full_board"], "is_recommended": True}
+        ],
+        cohorts=[
+            ("residence_citizen", "adult", 2),
+            ("residence_non_resident", "adult", 2),
+        ],
+    )
+    option = (await _built(quote["id"])).options[0]
+    assert _figure(option, "Group total") == D("126600")
+    assert _figure(option, "Billed to the client") == D("126720")
+    # Which is exactly the cohort rows summed at the disclosed rate.
+    assert [(one.per_person, one.total) for one in option.cohorts] == [
+        ("KES 17,600", "KES 35,200"),
+        ("USD 352", "USD 704"),
+    ]

@@ -13,6 +13,7 @@ document has to say the same thing in a year's time.
 from __future__ import annotations
 
 import uuid
+from decimal import Decimal
 
 import pytest
 from sqlalchemy import select
@@ -24,6 +25,8 @@ from tests.conftest import unique_email
 
 API = settings.API_V1_STR
 pytestmark = pytest.mark.asyncio(loop_scope="session")
+
+D = Decimal
 
 ARRIVAL, SWITCH, DEPARTURE = "2026-07-01", "2026-07-02", "2026-07-04"
 
@@ -587,3 +590,37 @@ async def test_an_optional_upgrade_is_named_as_outside_the_price(
     excludes = html.split("What the quoted price excludes")[1]
     assert "Optional transport upgrades" in excludes
     assert "KES 6,000" in excludes
+
+
+async def test_the_cohort_rows_add_up_to_the_total_printed_beside_them(
+    client, admin_tokens, sample_catalogue
+):
+    """A document whose parts do not sum to its whole contradicts itself (§3.6).
+
+    Two residents at KES 17,600 each and two non-residents at USD 352 each:
+
+        35,200 KES + 704 USD x 130 = 126,720
+
+    The whole-group build-up says 126,600, because it rounds once at a
+    different level, and printing that beside cohort rows summing to 126,720 is
+    a discrepancy a client will find. What they are billed is the cohort sum.
+    """
+    h, ids = _h(admin_tokens), sample_catalogue
+    quote, version = await _issued(
+        client,
+        h,
+        ids,
+        options=[
+            {"accommodation_id": ids["acc_sto_full_board"], "is_recommended": True}
+        ],
+        cohorts=[
+            ("residence_citizen", "adult", 2),
+            ("residence_non_resident", "adult", 2),
+        ],
+    )
+    html = await _render(client, h, quote["id"])
+    assert "KES 126,720" in html
+    assert "KES 126,600" not in html, "the build-up figure reached the client"
+    # And the version records what the client is billed, since that is the
+    # revenue figure the CRM reports on.
+    assert D(version["selling_price"]) == D("126720.00")

@@ -180,7 +180,10 @@ def _client_option(costing: OptionCosting) -> QuoteOptionClientRead:
         nights=costing.nights,
         currency=costing.currency,
         per_person=costing.build_up.per_person,
-        group_total=costing.build_up.group_total,
+        # The cohort sum where the group was priced per cohort: it is what the
+        # travellers are actually billed, and the only figure the per-cohort
+        # rows on the document add up to.
+        group_total=costing.client_total,
         is_comparable=costing.is_comparable,
         cohorts=[
             CohortPriceRead(

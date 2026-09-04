@@ -287,6 +287,25 @@ class WorksheetBuilder:
                 note="per person rounded up first, then multiplied out",
             ),
         ]
+        client_total = Decimal(str(raw.get("client_total") or group_total))
+        if client_total != group_total:
+            # The two differ by the rounding whenever the group is priced per
+            # cohort: each cohort rounds up in its own currency and is
+            # multiplied back out, so the sum of what the travellers are billed
+            # is not the whole-group figure rounded once. The client is billed
+            # the cohort sum; both are here because the gap is the kind of
+            # thing somebody reconciling an invoice needs to see rather than
+            # rediscover.
+            build_up.append(
+                WorksheetFigure(
+                    "Billed to the client",
+                    money(client_total, currency) or "",
+                    note=(
+                        "the cohort totals summed — what the per-traveller rows "
+                        "on the proposal add up to"
+                    ),
+                )
+            )
         # Realised margin is the three numbers §3.5 insists on tracking apart,
         # correctly added back together: on a discounted rack rate the retained
         # half is margin on top of the profit percentage, and calling the costed

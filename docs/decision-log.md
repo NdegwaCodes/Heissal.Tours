@@ -1069,3 +1069,18 @@ USD 352.
 `build_up.group_total` and the sum of the cohort totals differ by the rounding — 126,600 against
 126,720 on the two-cohort case above — because each rounds up at a different level. Both appear
 on the client document today, which is a contradiction the design exists to prevent (§3.6).
+
+**What the client is billed is the sum of the cohort totals** (Stage 3B, 2026-09-04)
+Found while adding the per-currency rounding step, and the rounding is what makes it visible.
+Each cohort's per-person figure is rounded up **in its own currency** and multiplied back out,
+so a mixed group billed KES 17,600 a head and USD 352 a head is billed exactly the sum of those
+— 126,720 — while the whole-group build-up, which rounds once at a different level, says
+126,600. Both were on the client document: cohort rows adding to one figure printed beside a
+total saying another. A document whose parts do not sum to its whole is the specific failure
+§3.6 exists to prevent, and it was reintroduced by the very mechanism meant to avoid it.
+
+`OptionCosting.client_total` is now the cohort sum where a group was priced per cohort, and it
+is what the client schema, the document and the version's `selling_total` and margin report —
+the revenue figure has to be the one on the invoice. The whole-group `build_up` is untouched:
+it is the internal worksheet, and the worksheet prints **both**, because the gap is something
+an operator reconciling an invoice should see rather than rediscover.

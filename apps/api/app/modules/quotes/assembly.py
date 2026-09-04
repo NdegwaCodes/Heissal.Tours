@@ -593,7 +593,7 @@ class QuoteAssemblyService:
                     agent_cover_fee=costing.build_up.agent_cover_fee,
                     supplier_paid_total=costing.supplier_paid_total,
                     retained_discount=costing.retained_discount,
-                    selling_total=costing.build_up.group_total,
+                    selling_total=costing.client_total,
                     per_person=costing.build_up.per_person,
                     currency=costing.currency,
                     is_recommended=option.is_recommended,
@@ -682,7 +682,10 @@ def _headline_money(headline: OptionCosting) -> dict[str, Decimal]:
     # Quantized to the precision the columns actually hold, so the figures a
     # caller reads back are the figures that were stored — an unrounded margin
     # returned before the round trip would not match the row afterwards.
-    selling = _money(headline.build_up.group_total)
+    # What the client is billed, not the whole-group build-up: on a mixed group
+    # those differ by the rounding, and the revenue figure the CRM reports on
+    # has to be the one on the invoice.
+    selling = _money(headline.client_total)
     internal = _money(headline.build_up.cost_subtotal - headline.retained_discount)
     profit = selling - internal
     return {
@@ -767,7 +770,12 @@ def _snapshot(
                     if o.build_up.per_person is not None
                     else None
                 ),
+                # Both: the build-up's own figure is the worksheet's, and the
+                # client total is what the cohort rows sum to (see
+                # ``OptionCosting.client_total``). Freezing only one of them
+                # would leave the other unreconstructable.
                 "group_total": str(o.build_up.group_total),
+                "client_total": str(o.client_total),
                 "warnings": list(o.warnings),
                 # The itinerary as quoted (§3.9). Frozen per leg, not derived
                 # from the option row, because a package's legs can be re-dated
