@@ -82,6 +82,45 @@ from app.modules.transport.models import DestinationTransportMode, TransferRate
 
 
 @dataclass(frozen=True)
+class CostEntry:
+    """One line of the internal costing worksheet (§3.12).
+
+    The client document says what a trip costs; this says *why*, in the form
+    somebody can check against the supplier's own paper: an amount, the basis
+    it is charged on, the multiplier that was actually applied, and the row it
+    came from. A cost you cannot trace to a document is a cost you cannot
+    defend when a supplier invoices something else.
+
+    ``unit_amount`` is what enters the price. On a discounted rack rate that is
+    neither the sheet figure nor what we pay — half the concession is passed to
+    the client (§3.5) — so all three are kept: the sheet to reconcile against
+    the PDF, the paid figure to reconcile against the invoice, and the costed
+    one to reconcile against the quote.
+    """
+
+    label: str
+    #: Which component of the build-up this rolls into.
+    component: str
+    basis: str
+    unit_amount: Decimal
+    #: The multiplier applied — room-nights, person-days, tickets, vehicles.
+    quantity: int
+    currency: str
+    #: ``unit_amount × quantity``, still in ``currency``.
+    extended: Decimal
+    #: Where it came from: table, row and the supplier document behind it.
+    source: str
+    residence: str | None = None
+    traveller_type: str | None = None
+    #: Which leg of the package, for a multi-destination option.
+    leg: int | None = None
+    #: The sheet rate and what the supplier is actually paid, where they differ
+    #: from ``unit_amount`` (a discounted rack rate — see §3.5).
+    sheet_amount: Decimal | None = None
+    paid_amount: Decimal | None = None
+
+
+@dataclass(frozen=True)
 class SupplementCharge:
     """One mandatory supplement as it applies to this stay."""
 
@@ -92,6 +131,9 @@ class SupplementCharge:
     currency: str
     nights: int
     cost: Decimal
+    #: The multiplier applied, and the row it came from — for the worksheet.
+    units: int = 1
+    source: str = ""
 
 
 @dataclass(frozen=True)
@@ -116,6 +158,8 @@ class TransportCharge:
     cost: Decimal
     is_optional: bool = False
     is_vvip: bool = False
+    #: The tariff row behind it, for the worksheet (§3.12).
+    source: str = ""
 
 
 @dataclass
@@ -140,6 +184,7 @@ class TransportCosting:
     #: priced at zero is the exact failure this stage exists to prevent.
     unpriced: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    entries: list[CostEntry] = field(default_factory=list)
     #: What the add-ons sell for: ``optional_total`` through the same build-up
     #: as the package, because an add-on offered at cost is sold at a loss.
     optional_price: Decimal = Decimal(0)
@@ -161,6 +206,10 @@ class RoomTypeQuote:
     # room, so a derived figure is never mistaken for a quoted one (§3.3).
     derived_occupancies: tuple[int, ...] = ()
     warnings: list[str] = field(default_factory=list)
+    # The worksheet's accommodation lines (§3.12), one per rate row and
+    # occupancy actually used rather than one per night: a three-night stay in
+    # thirteen rooms is two lines an operator can check, not thirty-nine.
+    entries: list[CostEntry] = field(default_factory=list)
     # The same cost split by residency, in the currency each was quoted in —
     # ``{residence: {currency: amount}}``. ``costed_total`` above is this summed
     # and converted, which is what compares room types; this is what lets each
@@ -190,6 +239,7 @@ class LegCosting:
     supplements: list[SupplementCharge]
     park_lines: list[CostLine]
     warnings: list[str] = field(default_factory=list)
+    entries: list[CostEntry] = field(default_factory=list)
 
 
 @dataclass
@@ -225,6 +275,10 @@ class OptionCosting:
     # client's confirmed requirement, and the only figures that are meaningful
     # for a mixed group, where ``build_up.per_person`` is necessarily NULL.
     cohort_prices: GroupPrice | None = None
+    # Every cost line behind this option, in the order the build-up reads
+    # (§3.12). The mirror of the client document: what the page shows as one
+    # figure, this shows as the lines it was made of.
+    entries: list[CostEntry] = field(default_factory=list)
     # Every leg of the package, in itinerary order. One entry for a
     # single-property option. The top-level ``room_type_*`` and ``meal_plan_*``
     # fields above describe the FIRST leg, because a document needs something to
@@ -236,6 +290,24 @@ class OptionCosting:
 # rest attach to an activity or a leg rather than to a bed, so they are not
 # charged here — see the 3.9 packages work.
 PARK_ENTRY = "park_entry"
+
+
+def _rate_source(rate: AccommodationRate) -> str:
+    """Where one accommodation rate came from, as an operator would check it.
+
+    The season and the rate kind matter as much as the id: reconciling against
+    a supplier's PDF means finding the right table on the right page, and "STO,
+    festive, from 2026-12-20" is what finds it.
+    """
+    parts = [
+        f"accommodation_rates {rate.id}",
+        f"{rate.rate_kind.upper()} · {rate.season_name} from {rate.effective_from}",
+    ]
+    if rate.supplier_discount_pct:
+        parts.append(f"sheet discount {rate.supplier_discount_pct}%")
+    if rate.source_document_id is not None:
+        parts.append(f"document {rate.source_document_id}")
+    return " · ".join(parts)
 
 
 def _supersedes(
@@ -574,7 +646,7 @@ class OptionPricingService:
             components["supplements"] = sum((s.cost for s in supplements), Decimal(0))
 
         warnings = list(best.warnings)
-        park_total, park_warnings, park_lines = await self._park_fees(
+        park_total, park_warnings, park_lines, park_entries = await self._park_fees(
             quote, accommodation, nights=nights, group=group
         )
         if park_total:
@@ -600,6 +672,59 @@ class OptionPricingService:
                 f"{requested_plan} rate, so it is priced on {plan_code}"
             )
 
+        # The leg's worksheet lines, in the order the build-up reads them.
+        entries: list[CostEntry] = [
+            replace(entry, leg=sequence) for entry in best.entries
+        ]
+        entries.extend(
+            CostEntry(
+                label=charge.label,
+                component="supplements",
+                basis=charge.basis,
+                unit_amount=charge.amount,
+                quantity=charge.units,
+                currency=charge.currency,
+                extended=charge.amount * charge.units,
+                source=charge.source,
+                leg=sequence,
+            )
+            for charge in supplements
+        )
+        entries.extend(replace(entry, leg=sequence) for entry in park_entries)
+        if needs_chef(plan_code):
+            meals = meals_needing_chef(plan_code, len(nights))
+            if option.chef_fee_per_meal:
+                entries.append(
+                    CostEntry(
+                        label="Chef fee",
+                        component="chef",
+                        basis="per_group",
+                        unit_amount=option.chef_fee_per_meal,
+                        quantity=meals,
+                        currency=quote.presentation_currency.upper(),
+                        extended=option.chef_fee_per_meal * meals,
+                        # Entered by an agent, so the "source" is the agent:
+                        # there is no supplier document to reconcile against,
+                        # and saying so is the point.
+                        source="quote_options.chef_fee_per_meal (entered by hand)",
+                        leg=sequence,
+                    )
+                )
+            if option.manual_meal_cost:
+                entries.append(
+                    CostEntry(
+                        label="Group food cost",
+                        component="meals",
+                        basis="per_group",
+                        unit_amount=option.manual_meal_cost,
+                        quantity=1,
+                        currency=quote.presentation_currency.upper(),
+                        extended=option.manual_meal_cost,
+                        source="quote_options.manual_meal_cost (entered by hand)",
+                        leg=sequence,
+                    )
+                )
+
         return LegCosting(
             sequence=sequence,
             accommodation_id=accommodation.id,
@@ -615,6 +740,7 @@ class OptionPricingService:
             supplements=supplements,
             park_lines=park_lines,
             warnings=warnings,
+            entries=entries,
         )
 
     async def _legs_of(
@@ -736,6 +862,11 @@ class OptionPricingService:
                     target[currency] = target.get(currency, Decimal(0)) + amount
 
         park_lines = [line for one in costed for line in one.park_lines]
+        # The whole option's worksheet: its legs' lines in itinerary order,
+        # then the journey, which belongs to the quote and is charged into
+        # every option (§3.10).
+        entries = [entry for one in costed for entry in one.entries]
+        entries.extend(transport.entries)
         supplements = [charge for one in costed for charge in one.supplements]
         warnings = [
             (f"leg {one.sequence} ({one.accommodation_name}): {note}"
@@ -812,6 +943,7 @@ class OptionPricingService:
                 ),
                 warnings=warnings,
                 cohort_prices=cohort_prices,
+                entries=entries,
                 legs=costed,
             )
         )
@@ -850,6 +982,8 @@ class OptionPricingService:
         by_residence: dict[str, dict[str, Decimal]] = {}
         derived: set[int] = set()
         per_person_basis: set[str] = set()
+        # (rate row, guests in the room, residency) -> room-nights charged.
+        used_rates: dict[tuple[uuid.UUID, int, str], list] = {}
         for residence, rooms in rooming.items():
             nightly = per_residence.get(residence)
             if not nightly:
@@ -886,6 +1020,11 @@ class OptionPricingService:
                     costed[currency] = costed.get(currency, Decimal(0)) + charge
                     mine = by_residence.setdefault(residence, {})
                     mine[currency] = mine.get(currency, Decimal(0)) + charge
+                    slot = (rate.id, guests, residence)
+                    if slot in used_rates:
+                        used_rates[slot][0] += 1
+                    else:
+                        used_rates[slot] = [1, rate]
 
         warnings: list[str] = []
         if derived:
@@ -910,6 +1049,29 @@ class OptionPricingService:
                 f"single-occupancy rate. The room was charged in full; check "
                 f"whether this sheet prices per person sharing before issuing."
             )
+        entries = [
+            CostEntry(
+                label=f"{room_type.name}, {guests} sharing ({residence})",
+                component="accommodation",
+                basis="per_room_per_night",
+                unit_amount=costed_rate(
+                    rate.rate_per_night, rate.supplier_discount_pct, rate.rate_kind
+                ),
+                quantity=room_nights,
+                currency=rate.currency.upper(),
+                extended=costed_rate(
+                    rate.rate_per_night, rate.supplier_discount_pct, rate.rate_kind
+                )
+                * room_nights,
+                source=_rate_source(rate),
+                residence=residence,
+                sheet_amount=rate.rate_per_night,
+                paid_amount=supplier_paid(
+                    rate.rate_per_night, rate.supplier_discount_pct
+                ),
+            )
+            for (_, guests, residence), (room_nights, rate) in used_rates.items()
+        ]
         paid_total = await self._to_presentation(quote, paid)
         costed_total = await self._to_presentation(quote, costed)
         return (
@@ -924,6 +1086,7 @@ class OptionPricingService:
                 derived_occupancies=tuple(sorted(derived)),
                 warnings=warnings,
                 costed_by_residence=by_residence,
+                entries=entries,
             ),
             None,
         )
@@ -1162,7 +1325,7 @@ class OptionPricingService:
         *,
         nights: list[date],
         group: Group,
-    ) -> tuple[Decimal, list[str], list[CostLine]]:
+    ) -> tuple[Decimal, list[str], list[CostLine], list[CostEntry]]:
         """Park and conservation entry for this option's destination (§3.8).
 
         The first time these reach an option's price. They were already on the
@@ -1212,7 +1375,7 @@ class OptionPricingService:
             .all()
         )
         if not rows:
-            return Decimal(0), [], []
+            return Decimal(0), [], [], []
 
         index: dict[tuple[str, date], ParkFee] = {}
         for fee in rows:
@@ -1232,6 +1395,8 @@ class OptionPricingService:
         per_cohort: dict[tuple[str, str, str], Decimal] = {}
         per_currency: dict[str, Decimal] = {}
         uncovered: set[str] = set()
+        # (fee row, cohort) -> [person-days charged, the amount each, the row].
+        charged: dict[tuple[uuid.UUID, str, str], list] = {}
         for cohort in group.cohorts:
             for night in nights:
                 tonight = index.get((cohort.residence, night))
@@ -1248,6 +1413,11 @@ class OptionPricingService:
                 per_currency[currency] = per_currency.get(currency, Decimal(0)) + charge
                 slot = (cohort.residence, cohort.traveller_type, currency)
                 per_cohort[slot] = per_cohort.get(slot, Decimal(0)) + charge
+                line = (tonight.id, cohort.residence, cohort.traveller_type)
+                if line in charged:
+                    charged[line][0] += cohort.count
+                else:
+                    charged[line] = [cohort.count, amount, tonight]
 
         lines = [
             CostLine(
@@ -1269,7 +1439,36 @@ class OptionPricingService:
                 f"whole stay, so those travellers are quoted without them. Load "
                 f"the missing schedule before issuing."
             )
-        return await self._to_presentation(quote, per_currency), warnings, lines
+        entries = [
+            CostEntry(
+                label=(
+                    f"Park entry, {accommodation.name}'s destination "
+                    f"({residence} {traveller_type})"
+                ),
+                component="park_fees",
+                basis="per_person_per_day",
+                unit_amount=amount,
+                quantity=person_days,
+                currency=fee.currency.upper(),
+                extended=amount * person_days,
+                source=(
+                    f"park_fees {fee.id} · {fee.fee_type} from {fee.effective_from}"
+                ),
+                residence=residence,
+                traveller_type=traveller_type,
+            )
+            for (_, residence, traveller_type), (
+                person_days,
+                amount,
+                fee,
+            ) in charged.items()
+        ]
+        return (
+            await self._to_presentation(quote, per_currency),
+            warnings,
+            lines,
+            entries,
+        )
 
     # -- transport ----------------------------------------------------------- #
 
@@ -1323,7 +1522,11 @@ class OptionPricingService:
         for segment in segments:
             label = self._segment_label(segment)
             if segment.mode in transport_rules.NAMED_ONLY_MODES:
-                out.named.append(label)
+                # The agent's own words for the flight, not our composed
+                # "Line haul · AIR" label: this string reaches the client, on
+                # the transport page and in the exclusions, and "Nairobi to
+                # Ukunda (Line haul · AIR)" is our vocabulary leaking again.
+                out.named.append(segment.description or label)
                 continue
             if (
                 segment.mode not in transport_rules.PRICED_MODES
@@ -1357,7 +1560,7 @@ class OptionPricingService:
                 )
                 continue
 
-            amount, currency, basis, tariff_label = tariff
+            amount, currency, basis, tariff_label, source = tariff
             if (
                 segment.kind == transport_rules.TRANSFER
                 and segment.description
@@ -1390,6 +1593,7 @@ class OptionPricingService:
                 cost=cost,
                 is_optional=segment.is_optional,
                 is_vvip=segment.is_vvip,
+                source=source,
             )
             if segment.is_optional:
                 out.optional.append(charge)
@@ -1414,12 +1618,48 @@ class OptionPricingService:
 
         out.total = await self._to_presentation(quote, per_currency)
         out.optional_total = await self._to_presentation(quote, optional_currency)
+        # Optional movements are on the worksheet too, marked as what they are:
+        # they are a real cost the moment the client accepts the upgrade, and
+        # an operator reconciling an invoice needs the line either way.
+        out.entries = [
+            CostEntry(
+                label=(
+                    f"{charge.label} (optional)" if charge.is_optional
+                    else charge.label
+                ),
+                # Optional movements are a component of their own on the
+                # worksheet. Filed under "transport" they would sit above a
+                # subtotal that deliberately excludes them, and a ledger whose
+                # lines do not add up to its own subtotal is worse than no
+                # ledger.
+                component=(
+                    "transport_optional" if charge.is_optional else "transport"
+                ),
+                basis=charge.basis,
+                unit_amount=charge.unit_amount,
+                # The multiplier that was actually applied — tickets for a
+                # per-person fare, vehicles or legs for a group one — derived
+                # the same way the charge was, not re-guessed from the total.
+                quantity=multiplier(
+                    charge.basis,
+                    pax=group.pax,
+                    nights=0,
+                    days=0,
+                    rooms=0,
+                    units=charge.units,
+                ),
+                currency=charge.currency,
+                extended=charge.cost,
+                source=charge.source,
+            )
+            for charge in out.charges + out.optional
+        ]
         return out
 
     async def _tariff_for(
         self, segment: QuoteTransportSegment, *, on: date
-    ) -> tuple[Decimal, str, str, str] | None:
-        """The tariff for one movement: ``(amount, currency, basis, label)``.
+    ) -> tuple[Decimal, str, str, str, str] | None:
+        """One movement's tariff: ``(amount, currency, basis, label, source)``.
 
         VAT-normalised here rather than at write time. Every other rate in the
         system is normalised at ingestion (:mod:`app.core.vat`), but these two
@@ -1470,6 +1710,8 @@ class OptionPricingService:
                 best.currency.upper(),
                 transport_rules.line_basis("per_leg"),
                 best.route_label,
+                f"transfer_rates {best.id} · {best.vehicle_type} from "
+                f"{best.effective_from}",
             )
 
         fares = list(
@@ -1500,6 +1742,9 @@ class OptionPricingService:
             fare.currency.upper(),
             transport_rules.line_basis(fare.cost_basis),
             fare.label or "",
+            f"destination_transport_modes {fare.id} · {fare.mode}"
+            + (f" {fare.travel_class}" if fare.travel_class else "")
+            + f" from {fare.effective_from}",
         )
 
     async def _supplements(
@@ -1558,6 +1803,17 @@ class OptionPricingService:
                     amount=row.amount,
                     currency=row.currency.upper(),
                     nights=affected,
+                    units=multiplier(
+                        row.basis,
+                        pax=pax,
+                        nights=affected,
+                        days=affected,
+                        rooms=rooms,
+                    ),
+                    source=(
+                        f"accommodation_supplements {row.id} · {row.kind} "
+                        f"from {row.effective_from}"
+                    ),
                     cost=await self.fx.convert(
                         cost,
                         row.currency.upper(),

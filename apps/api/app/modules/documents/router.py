@@ -1,8 +1,12 @@
 """The quotation document: rendered HTML, and the brand copy it prints.
 
-Guarded by ``quote:read`` rather than ``quote:read_cost``. The document is the
-client-facing artefact by definition — its view model has no cost or margin field
-at all — so a sales agent who can read a quote can render one.
+The proposal is guarded by ``quote:read`` rather than ``quote:read_cost``. It is
+the client-facing artefact by definition — its view model has no cost or margin
+field at all — so a sales agent who can read a quote can render one.
+
+The **costing worksheet** on the same quote is the mirror of it (§3.12) and is
+guarded by ``quote:read_cost``, because it is the half of the same information
+the client must never see.
 """
 
 from __future__ import annotations
@@ -75,6 +79,34 @@ async def render_quotation_html(
     """
     html = await QuotationDocumentService(db).render_html(
         quote_id, version_number=version, inline_assets=inline_assets
+    )
+    return HTMLResponse(content=html)
+
+
+@router.get(
+    "/quotes/{quote_id}/worksheet.html",
+    response_class=HTMLResponse,
+    responses={200: {"content": {"text/html": {}}}},
+)
+async def render_costing_worksheet(
+    quote_id: uuid.UUID,
+    version: int | None = Query(
+        default=None,
+        ge=1,
+        description="Version number to explain. Defaults to the latest issued one.",
+    ),
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_permission("quote:read_cost")),
+):
+    """The internal costing worksheet: the mirror of the client document (§3.12).
+
+    Every line with its basis, the multiplier applied and the row it came from,
+    plus the build-up and the three numbers realised margin is made of. Gated
+    on ``quote:read_cost`` — the same permission that gates the internal
+    pricing read — because this is the document the client must never see.
+    """
+    html = await QuotationDocumentService(db).render_worksheet_html(
+        quote_id, version_number=version
     )
     return HTMLResponse(content=html)
 

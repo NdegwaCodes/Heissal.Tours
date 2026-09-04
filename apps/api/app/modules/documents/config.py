@@ -88,6 +88,31 @@ class DocumentConfig(BaseModel):
         )
     )
 
+    # --- What the price does not cover ------------------------------------- #
+    # A priced proposal that does not say what it excludes is the commonest
+    # cause of a dispute at invoice time: the client reads one total and assumes
+    # it covers the things a holiday obviously needs. Config rather than
+    # template copy because the list is commercial policy — it changes when what
+    # Heissal sells changes, which is not a deploy.
+    exclusions_heading: str = Field(default="What the quoted price excludes")
+    exclusions: list[str] = Field(
+        default_factory=lambda: [
+            "Travel insurance",
+            "Airport taxes, visa fees and travel documentation",
+            "Meals and drinks beyond the stated meal plan",
+            "Personal expenses — laundry, telephone, minibar and shopping",
+            "Optional activities and excursions not listed as included",
+            "Tips and gratuities",
+        ]
+    )
+    exclusions_note: str = Field(
+        default=(
+            "Anything not listed as included in your selected option is not "
+            "covered by the quoted price. We are glad to quote separately for "
+            "any of it."
+        )
+    )
+
     # --- Notices ----------------------------------------------------------- #
     availability_notice_heading: str = Field(
         default="Accommodation availability & booking"

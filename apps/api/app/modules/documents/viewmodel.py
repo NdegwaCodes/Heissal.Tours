@@ -227,6 +227,10 @@ class QuotationView:
     rejected: list[RejectedView]
     transport: TransportView | None
     experiences: list[ExperienceView]
+    # What the quoted price does not cover (§3.12). The standing list from
+    # config, plus whatever this quote makes true — the flights we cannot
+    # ticket, the upgrades quoted separately.
+    exclusions: list[str]
     valid_until: date | None
     issued_on: date
 
@@ -293,6 +297,7 @@ class QuotationViewBuilder:
             ],
             transport=transport,
             experiences=await self._experiences(quote, currency),
+            exclusions=self._exclusions(config, transport),
             valid_until=quote.valid_until,
             issued_on=version.created_at.date(),
         )
@@ -558,6 +563,33 @@ class QuotationViewBuilder:
             facts.append(Fact("Accommodation", f"{len(options)} curated options"))
         facts.append(Fact("Pricing", config.vat_note))
         return facts
+
+    @staticmethod
+    def _exclusions(
+        config: DocumentConfig, transport: TransportView | None
+    ) -> list[str]:
+        """What the price does not cover, standing list first (§3.12).
+
+        The quote-specific lines are the ones worth getting right. A flight we
+        cannot ticket has to appear here as well as on the transport page —
+        this is the list a client checks before they sign — and an optional
+        upgrade has to be named as outside the package, or the total on the
+        comparison table reads as covering it.
+        """
+        out = list(config.exclusions)
+        if transport is not None:
+            for flight in transport.named:
+                out.insert(
+                    0,
+                    f"Air tickets ({flight}) — Heissal does not ticket air "
+                    f"travel, so these are booked directly by you",
+                )
+            if transport.add_on:
+                out.append(
+                    f"Optional transport upgrades, quoted separately at "
+                    f"{transport.add_on}"
+                )
+        return out
 
     @staticmethod
     def _nights(quote: Quote) -> int:

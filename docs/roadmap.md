@@ -215,8 +215,23 @@ backend-only and the client sees per-person and group totals only.
   - Verified by rendering to PDF and reading the pages back, which is what caught the A4
     overflow (fixed by dropping a duplicate fact cell, the gallery strip and 24mm of hero) and
     the transport page printing "Terminus to hotel - Included" four times
-- ☐ 3.12 Internal costing worksheet (the mirror of the client document, every line with its
-  basis, multiplier and source document) + the exclusions list (travel insurance and the rest)
+- ☑ 3.12 Internal costing worksheet + the exclusions list — `app/modules/documents/worksheet.py`
+  and `templates/worksheet.html.j2` at `GET /quotes/{id}/worksheet.html`, gated on
+  `quote:read_cost`; 13 new tests (`tests/test_worksheet.py` plus the exclusions)
+  - **A second view model and a second template**, not the proposal with cost columns switched
+    on: `QuotationView` having no cost field at all is what makes the boundary structural (§2).
+    Both read the same frozen version, because a mirror that can disagree with what it mirrors
+    is not evidence
+  - **Every line carries its basis, its multiplier and its source row** — table, id, rate kind,
+    season and supplier document. Accommodation aggregated per rate row and occupancy (two
+    checkable lines, not thirty-nine), with the sheet rate, what the property invoices and what
+    entered the client's price all three kept (§3.5). Hand-entered costs say so
+  - **Optional upgrades are their own component**, or the ledger's lines do not add up to its
+    own subtotal — caught by rendering the sheet and adding up the column. The journey is
+    printed once, not under every option
+  - **The exclusions list** is config (insurance, airport taxes, personal expenses, tips) plus
+    what this quote makes true: the flights we cannot ticket, and the upgrades with their price
+    so "not included" cannot read as "not available". Dashes, not ticks
 
 **~~Known gap carried in:~~ closed 2026-09-02.** The gap was recorded as "`compute_park_fee`
 has no callers — park fees are computed nowhere", and the half of that which was wrong matters:

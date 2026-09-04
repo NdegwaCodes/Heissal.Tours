@@ -27,6 +27,7 @@ from app.modules.documents.config import DOCUMENT_SETTINGS_KEY, DocumentConfig
 from app.modules.documents.fonts import face_css
 from app.modules.documents.pdf import default_renderer
 from app.modules.documents.viewmodel import QuotationView, QuotationViewBuilder
+from app.modules.documents.worksheet import Worksheet, WorksheetBuilder
 from app.modules.quotes.models import Quote, QuoteVersion
 from app.modules.settings.models import AppSetting
 
@@ -141,6 +142,29 @@ class QuotationDocumentService:
         # metrics — so there is no preview mode in which linking them is the
         # better trade.
         return template.render(view=view, page=page, fonts_css=face_css())
+
+    async def worksheet(
+        self, quote_id: uuid.UUID, *, version_number: int | None = None
+    ) -> Worksheet:
+        quote, version = await self._resolve(quote_id, version_number)
+        return await WorksheetBuilder(self.db).build(quote, version)
+
+    async def render_worksheet_html(
+        self, quote_id: uuid.UUID, *, version_number: int | None = None
+    ) -> str:
+        """The internal costing worksheet for an issued version (§3.12).
+
+        A second template with a second view model, not the proposal with cost
+        columns switched on: the client view model having no cost field at all
+        is the mechanism that keeps the boundary structural (§2), and the
+        moment one class serves both, that mechanism is gone.
+
+        No fonts and no imagery — this is read beside an invoice, not sent to
+        anybody — so it renders without the embedded faces the proposal needs.
+        """
+        view = await self.worksheet(quote_id, version_number=version_number)
+        template = environment().get_template("worksheet.html.j2")
+        return template.render(view=view)
 
     async def render_pdf(
         self, quote_id: uuid.UUID, *, version_number: int | None = None

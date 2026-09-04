@@ -1001,3 +1001,48 @@ in large type immediately above it.
 Repeated movements are **counted, not listed**: a rail return with its four mandatory transfers
 is six movements and two distinct routes, and a page that prints "Terminus to hotel — Included"
 four times reads as a bug rather than as thoroughness.
+
+**The worksheet is a second view model and a second template, not the proposal with
+cost columns switched on** (Stage 3.12, 2026-09-04)
+`QuotationView` having no field for cost, margin or supplier payments is the mechanism that
+makes the internal/client boundary structural (§2) — a template cannot print what it was never
+handed. Adding the worksheet to it would dissolve exactly that. So: two view models, two
+templates, two permissions (`quote:read` for the proposal, `quote:read_cost` for the sheet),
+both reading the **same frozen version**, because a mirror that can disagree with the thing it
+mirrors is not evidence of anything.
+
+**Every cost line carries its basis, its multiplier and its source row** (Stage 3.12,
+2026-09-04)
+A cost you cannot trace to a document is a cost you cannot defend when a supplier invoices
+something else. Accommodation lines are aggregated per rate row and occupancy rather than per
+night — a three-night stay in thirteen rooms is two lines an operator can check, not
+thirty-nine — and each names the table, the row, the rate kind, the season and the supplier
+document behind it. Hand-entered costs (a chef fee, a food budget) say *"entered by hand"*:
+that is the line nobody can check against anything, so it is the line that needs re-checking.
+
+Three numbers per accommodation line, as §3.5 requires: the sheet rate (reconciles against the
+PDF), what the property invoices (reconciles against the invoice) and what entered the client's
+price (reconciles against the quote). On a discounted rack rate those are three different
+figures, and realised margin is only honest when all three are kept.
+
+**Optional upgrades are their own component on the worksheet** (Stage 3.12, 2026-09-04)
+Filed under transport they sat above a subtotal that deliberately excludes them, and a ledger
+whose lines do not add up to its own subtotal is worse than no ledger — it will be believed.
+Caught by rendering the sheet and adding up the column. The journey itself is printed once at
+the top rather than under every option, or a sheet would read as though it had been paid for
+several times.
+
+**"Paid to the properties", not "paid to suppliers"** (Stage 3.12, 2026-09-04)
+The stored figure is the accommodation half only — it exists because a discounted rack rate
+makes what we pay differ from what we charge — and labelling it as everything that leaves the
+account would understate outgoings by the whole journey.
+
+**The exclusions list is config, and the quote adds to it** (Stage 3.12, 2026-09-04)
+A priced proposal that does not say what it excludes is the commonest cause of a dispute at
+invoice time: one total reads as covering everything a holiday needs. The standing list
+(insurance, airport taxes, personal expenses, tips) is `app_settings["document"]`, because it
+is commercial policy and changes when what Heissal sells changes — not a deploy. On top of it
+the quote's own facts: the flights we cannot ticket (§3.10) and the optional upgrades, named
+with their price so "not included" cannot be read as "not available". Marked with dashes rather
+than ticks — an exclusions list bulleted like an inclusions list is the one misreading this
+section cannot afford.

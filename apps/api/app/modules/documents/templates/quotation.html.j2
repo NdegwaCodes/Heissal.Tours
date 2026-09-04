@@ -292,6 +292,9 @@
     color: var(--gold);
   }
   .panel .ticks li::before { color: var(--gold-soft); }
+  /* An exclusions list marked with ticks reads as an inclusions list at a
+     glance, which is the one misreading this section cannot afford. */
+  .crosses li::before { content: "–"; color: var(--ink-soft); }
   .two-col { column-count: 2; column-gap: 22pt; }
 
   /* ---- Notices ---- */
@@ -714,6 +717,19 @@
   </table>
 
   <p style="margin-top:12pt;font-weight:600;color:var(--ink)">{{ view.config.vat_note }}.</p>
+
+  {% if view.exclusions %}
+  {# A priced proposal that does not say what it excludes is the commonest
+     cause of a dispute at invoice time: one total reads as covering everything
+     a holiday needs (§3.12). Beside the table on purpose — this is the page a
+     client reads before they choose. #}
+  <hr class="rule">
+  <div class="eyebrow">{{ view.config.exclusions_heading }}</div>
+  <ul class="ticks two-col crosses" style="margin-top:8pt">
+    {% for item in view.exclusions %}<li>{{ item }}</li>{% endfor %}
+  </ul>
+  <p class="serif-note" style="margin-top:6pt">{{ view.config.exclusions_note }}</p>
+  {% endif %}
 
   <div class="notice">
     <div class="cell-label">{{ view.config.availability_notice_heading }}</div>

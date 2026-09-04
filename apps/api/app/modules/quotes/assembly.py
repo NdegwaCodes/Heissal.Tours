@@ -810,6 +810,38 @@ def _snapshot(
                     }
                     for price in (o.cohort_prices.cohorts if o.cohort_prices else ())
                 ],
+                # The costing worksheet's lines (§3.12), frozen with the
+                # figures they add up to. Frozen rather than recomputed for the
+                # reason the money is: a rate superseded next month must not
+                # change what this version says it was costed at, and the
+                # source strings are what let an operator reconcile it against
+                # the supplier's own paper years later.
+                "lines": [
+                    {
+                        "label": entry.label,
+                        "component": entry.component,
+                        "basis": entry.basis,
+                        "unit_amount": str(entry.unit_amount),
+                        "quantity": entry.quantity,
+                        "currency": entry.currency,
+                        "extended": str(entry.extended),
+                        "source": entry.source,
+                        "residence": entry.residence,
+                        "traveller_type": entry.traveller_type,
+                        "leg": entry.leg,
+                        "sheet_amount": (
+                            str(entry.sheet_amount)
+                            if entry.sheet_amount is not None
+                            else None
+                        ),
+                        "paid_amount": (
+                            str(entry.paid_amount)
+                            if entry.paid_amount is not None
+                            else None
+                        ),
+                    }
+                    for entry in o.entries
+                ],
                 "conversions": {
                     pair: str(rate)
                     for pair, rate in (

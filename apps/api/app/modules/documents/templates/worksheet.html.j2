@@ -1,0 +1,267 @@
+<!doctype html>
+{#
+  The internal costing worksheet (§3.12) — the mirror of the quotation.
+
+  Deliberately plain. The proposal is a piece of persuasion and carries the
+  brand's type and photography; this is evidence, read beside a supplier's
+  invoice, and every ounce of styling that is not helping somebody reconcile a
+  figure is in the way. So: system faces (nothing embedded, so the file stays
+  small enough to attach to an email), landscape (the ledger has eight columns
+  and a source string that has to be readable), and no imagery at all.
+
+  Every figure here is frozen. Nothing on this page is recomputed at render
+  time — see the module docstring for why that is what makes it evidence.
+#}
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>{{ view.quote_number }} v{{ view.version_number }} — costing worksheet</title>
+<style>
+  @page { size: A4 landscape; margin: 12mm 12mm 14mm; }
+  :root {
+    --ink: #17110c;
+    --ink-soft: #6b6259;
+    --hairline: #d9d2c8;
+    --cream: #f6f2ea;
+    --flag: #8a2d12;
+    --font: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+    --mono: "Cascadia Mono", Consolas, "SF Mono", Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: var(--font); font-size: 8.5pt; color: var(--ink); }
+  h1 { font-size: 15pt; margin: 0; font-weight: 600; }
+  h2 { font-size: 11pt; margin: 0 0 4pt; font-weight: 600; }
+  .eyebrow {
+    font-size: 7pt; letter-spacing: .12em; text-transform: uppercase;
+    color: var(--ink-soft);
+  }
+  .sheet { padding: 0 0 10pt; }
+  .head { display: flex; justify-content: space-between; align-items: flex-end;
+          border-bottom: 2px solid var(--ink); padding-bottom: 6pt; }
+  .facts { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6pt;
+           margin: 8pt 0 12pt; }
+  .facts div { border: 1px solid var(--hairline); padding: 5pt 6pt; }
+  .facts .v { font-weight: 600; margin-top: 2pt; }
+
+  .option { border: 1px solid var(--hairline); padding: 8pt 9pt; margin-bottom: 10pt;
+            page-break-inside: avoid; }
+  .option-head { display: flex; justify-content: space-between; align-items: baseline;
+                 gap: 8pt; border-bottom: 1px solid var(--hairline);
+                 padding-bottom: 5pt; margin-bottom: 6pt; }
+  .flag { color: var(--flag); font-weight: 600; }
+  .body { display: grid; grid-template-columns: 1.7fr 1fr; gap: 10pt; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 8pt; }
+  th { text-align: left; font-size: 6.8pt; letter-spacing: .1em; text-transform: uppercase;
+       color: var(--ink-soft); border-bottom: 1px solid var(--ink); padding: 3pt 4pt; }
+  td { padding: 3pt 4pt; border-bottom: 1px solid var(--hairline); vertical-align: top; }
+  td.num, th.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  tr.sub td { background: var(--cream); font-weight: 600; }
+  .src { font-family: var(--mono); font-size: 6.6pt; color: var(--ink-soft);
+         word-break: break-all; }
+  .note { color: var(--ink-soft); font-size: 7pt; }
+  .figures td:first-child { width: 55%; }
+  .warn { border-left: 3px solid var(--flag); background: var(--cream);
+          padding: 5pt 7pt; margin-top: 6pt; font-size: 7.6pt; }
+</style>
+</head>
+<body>
+<div class="sheet">
+  <div class="head">
+    <div>
+      <div class="eyebrow">Internal costing worksheet &mdash; not for the client</div>
+      <h1>{{ view.quote_number }} &middot; version {{ view.version_number }}</h1>
+    </div>
+    <div class="eyebrow">Issued {{ view.issued_on }}</div>
+  </div>
+
+  <div class="facts">
+    <div><div class="eyebrow">Client</div><div class="v">{{ view.client_name }}</div></div>
+    <div><div class="eyebrow">Arrival</div><div class="v">{{ view.arrival }}</div></div>
+    <div><div class="eyebrow">Departure</div><div class="v">{{ view.departure }}</div></div>
+    <div><div class="eyebrow">Nights</div><div class="v">{{ view.nights }}</div></div>
+    <div><div class="eyebrow">Travellers</div><div class="v">{{ view.pax }}</div></div>
+    <div><div class="eyebrow">Presentation</div><div class="v">{{ view.currency }}</div></div>
+  </div>
+
+  {% if view.journey %}
+  {# Once, not once per option: the same journey is charged into every option
+     (§3.10), and repeating it under each would read as charging it twice. #}
+  <h2>The journey</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Movement</th><th>Basis</th><th class="num">Unit</th>
+        <th class="num">&times;</th><th class="num">Cost</th><th>Source</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for line in view.journey %}
+      <tr>
+        <td>{{ line.label }}</td>
+        <td>{{ line.basis }}</td>
+        <td class="num">{{ line.unit_amount }}</td>
+        <td class="num">{{ line.quantity }}</td>
+        <td class="num">{{ line.extended }}</td>
+        <td class="src">{{ line.source }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% if view.journey_note %}<div class="note" style="margin-top:4pt">{{ view.journey_note }}</div>{% endif %}
+  {% endif %}
+
+  {% for option in view.options %}
+  <div class="option">
+    <div class="option-head">
+      <div>
+        <h2>Option {{ option.number }} &middot; {{ option.name }}</h2>
+        <div class="eyebrow">
+          {{ option.room_type }} &middot; {{ option.meal_plan }}
+          {%- if option.rooms_required %} &middot; {{ option.rooms_required }} room(s){% endif %}
+          {%- if option.nights %} &middot; {{ option.nights }} night(s){% endif %}
+          {%- if option.route %} &middot; {{ option.route }}{% endif %}
+        </div>
+      </div>
+      <div class="eyebrow">
+        {% if option.is_recommended %}<span class="flag">Recommended</span>{% endif %}
+        {% if not option.is_comparable %} &middot; not comparable{% endif %}
+        {% if option.meal_plan_fallback_from %} &middot; fell back from {{ option.meal_plan_fallback_from }}{% endif %}
+      </div>
+    </div>
+
+    <div class="body">
+      <div>
+        <table>
+          <thead>
+            <tr>
+              <th>Line</th><th>Basis</th><th class="num">Unit</th><th class="num">&times;</th>
+              <th class="num">Extended</th><th class="num">Sheet</th><th class="num">Paid</th>
+              <th>Source</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for group in option.groups %}
+            {% for line in group.lines %}
+            <tr>
+              <td>
+                {% if line.leg %}<span class="note">Leg {{ line.leg }}</span> {% endif %}{{ line.label }}
+                <div class="note">{{ line.who }}</div>
+              </td>
+              <td>{{ line.basis }}</td>
+              <td class="num">{{ line.unit_amount }}</td>
+              <td class="num">{{ line.quantity }}</td>
+              <td class="num">{{ line.extended }}</td>
+              {# The sheet rate and what the supplier is actually paid, which on
+                 a discounted rack rate are two more numbers than the one that
+                 enters the price (§3.5). #}
+              <td class="num">{{ line.sheet_amount or "" }}</td>
+              <td class="num">{{ line.paid_amount or "" }}</td>
+              <td class="src">{{ line.source }}</td>
+            </tr>
+            {% endfor %}
+            <tr class="sub">
+              <td colspan="4">{{ group.label }}</td>
+              <td class="num">{{ group.total or "" }}</td>
+              <td colspan="3" class="note">
+                {% if group.total %}in {{ view.currency }}, converted where the source currency differs{% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% for warning in option.warnings %}
+        <div class="warn">{{ warning }}</div>
+        {% endfor %}
+      </div>
+
+      <div>
+        <div class="eyebrow">Build-up</div>
+        <table class="figures">
+          <tbody>
+            {% for figure in option.build_up %}
+            <tr>
+              <td>{{ figure.label }}{% if figure.note %}<div class="note">{{ figure.note }}</div>{% endif %}</td>
+              <td class="num">{{ figure.value }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+
+        <div class="eyebrow" style="margin-top:8pt">Realised margin</div>
+        <table class="figures">
+          <tbody>
+            {% for figure in option.margin %}
+            <tr>
+              <td>{{ figure.label }}{% if figure.note %}<div class="note">{{ figure.note }}</div>{% endif %}</td>
+              <td class="num">{{ figure.value }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+
+        {% if option.cohorts %}
+        <div class="eyebrow" style="margin-top:8pt">Per cohort</div>
+        <table>
+          <tbody>
+            {% for cohort in option.cohorts %}
+            <tr>
+              <td>{{ cohort.label }} <span class="note">&times;{{ cohort.headcount }}</span></td>
+              <td class="num">{{ cohort.per_person }}</td>
+              <td class="num">{{ cohort.total }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% endif %}
+
+        {% if option.conversions %}
+        {# The rates the figures were reached at, not today's: a converted total
+           with an unstated rate is a dispute waiting to happen. #}
+        <div class="eyebrow" style="margin-top:8pt">Exchange rates used</div>
+        <table class="figures">
+          <tbody>
+            {% for pair in option.conversions %}
+            <tr><td>{{ pair.label }}</td><td class="num">{{ pair.value }}</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+
+  {% if view.rejected %}
+  <h2>Considered and declined</h2>
+  <table>
+    <thead><tr><th>Property</th><th>Reason printed to the client</th><th>Source</th></tr></thead>
+    <tbody>
+      {% for name, reason, source in view.rejected %}
+      <tr><td>{{ name }}</td><td>{{ reason }}</td><td class="note">{{ source }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  {% if view.problems %}
+  {# What readiness said at the moment of issue, advisories included: "this went
+     out with two options instead of five" is the kind of thing nobody
+     remembers a month later. #}
+  <h2 style="margin-top:10pt">Readiness at issue</h2>
+  <table>
+    <thead><tr><th>Severity</th><th>Code</th><th>Message</th></tr></thead>
+    <tbody>
+      {% for severity, code, message in view.problems %}
+      <tr>
+        <td{% if severity == "blocking" %} class="flag"{% endif %}>{{ severity }}</td>
+        <td class="src">{{ code }}</td>
+        <td>{{ message }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</div>
+</body>
+</html>

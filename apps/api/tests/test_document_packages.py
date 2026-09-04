@@ -470,3 +470,120 @@ async def test_repeated_movements_are_counted_rather_than_listed(
     assert "SGR Nairobi to Mombasa × 2" in html
     # Once in the route line, once in its own cell — not six times.
     assert html.count("Terminus to hotel") == 2, html.count("Terminus to hotel")
+
+
+# --------------------------------------------------------------------------- #
+# What the price excludes (§3.12)
+# --------------------------------------------------------------------------- #
+
+
+async def test_the_document_says_what_the_price_excludes(
+    client, admin_tokens, sample_catalogue
+):
+    """One total reads as covering everything a holiday needs.
+
+    Not saying otherwise is the commonest cause of a dispute at invoice time,
+    so the standing list is on the page a client reads before they choose.
+    """
+    h, ids = _h(admin_tokens), sample_catalogue
+    quote, _ = await _issued(
+        client,
+        h,
+        ids,
+        options=[
+            {"accommodation_id": ids["acc_sto_full_board"], "is_recommended": True}
+        ],
+    )
+    html = await _render(client, h, quote["id"])
+    assert "What the quoted price excludes" in html
+    assert "Travel insurance" in html
+    assert "Tips and gratuities" in html
+
+
+async def test_a_named_flight_is_repeated_in_the_exclusions(
+    client, admin_tokens, sample_catalogue
+):
+    """This is the list a client checks before they sign.
+
+    The transport page names the flight as theirs to book; the exclusions say
+    the fare is not in the price. Both, because a client who reads only one of
+    them still has to end up with a ticket.
+    """
+    h, ids = _h(admin_tokens), sample_catalogue
+    quote, _ = await _issued(
+        client,
+        h,
+        ids,
+        options=[
+            {"accommodation_id": ids["acc_sto_full_board"], "is_recommended": True}
+        ],
+        segments=[
+            {
+                "sequence": 1,
+                "kind": "line_haul",
+                "mode": "air",
+                "description": "Nairobi to Ukunda",
+            },
+            {
+                "sequence": 2,
+                "kind": "transfer",
+                "mode": "road",
+                "vehicle_type": "saloon",
+                "destination_id": ids["destination_diani"],
+                "description": "Airstrip to hotel",
+            },
+        ],
+    )
+    html = await _render(client, h, quote["id"])
+    excludes = html.split("What the quoted price excludes")[1]
+    assert "Nairobi to Ukunda" in excludes
+    assert "does not ticket air travel" in excludes
+    # And our own composed label never reaches the page.
+    assert "Line haul" not in html
+
+
+async def test_an_optional_upgrade_is_named_as_outside_the_price(
+    client, admin_tokens, sample_catalogue
+):
+    """With its price, so "not included" cannot be read as "not available"."""
+    h, ids = _h(admin_tokens), sample_catalogue
+    quote, _ = await _issued(
+        client,
+        h,
+        ids,
+        options=[
+            {"accommodation_id": ids["acc_sto_full_board"], "is_recommended": True}
+        ],
+        segments=[
+            {
+                "sequence": 1,
+                "kind": "transfer",
+                "mode": "road",
+                "vehicle_type": "saloon",
+                "destination_id": ids["destination_diani"],
+                "description": "Airport to hotel",
+            },
+            {
+                "sequence": 2,
+                "kind": "transfer",
+                "mode": "road",
+                "vehicle_type": "saloon",
+                "destination_id": ids["destination_diani"],
+                "description": "Hotel to airport",
+            },
+            {
+                "sequence": 3,
+                "kind": "transfer",
+                "mode": "road",
+                "vehicle_type": "saloon",
+                "destination_id": ids["destination_diani"],
+                "description": "VVIP meet and greet",
+                "is_optional": True,
+                "is_vvip": True,
+            },
+        ],
+    )
+    html = await _render(client, h, quote["id"])
+    excludes = html.split("What the quoted price excludes")[1]
+    assert "Optional transport upgrades" in excludes
+    assert "KES 6,000" in excludes
