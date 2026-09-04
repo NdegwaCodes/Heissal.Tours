@@ -608,6 +608,11 @@ class QuoteOptionClientRead(BaseModel):
     # One row per cohort. Residents in KES beside non-residents in USD, adults
     # apart from children — what the client asked to be able to show.
     cohorts: list[CohortPriceRead] = Field(default_factory=list)
+    # What the destination includes and this price therefore covers, by name.
+    # Client-facing on purpose: these are the words the proposal lists under
+    # Included, and a client who is charged for an excursion has to be able to
+    # read that they are getting it.
+    activities: list[str] = Field(default_factory=list)
     # One entry per leg of the package. A single-property option has one; the
     # top-level room and plan fields above describe the first leg only.
     #

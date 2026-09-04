@@ -344,6 +344,12 @@ class QuotationViewBuilder:
             included.append(MEAL_PLAN_PHRASES.get(plan_code, plan_name))
         if has_transport:
             included.append("Complete group transfers")
+        # The mandatory activities, by name. They are charged into the price,
+        # so naming them here is not marketing: it is what the client is
+        # paying for, said in the words they will recognise.
+        included.extend(
+            str(name) for name in (raw.get("activities") or []) if str(name)
+        )
         included.append(f"{config.company_name} coordination")
 
         legs = sorted(

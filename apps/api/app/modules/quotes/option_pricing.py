@@ -26,7 +26,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 
 from sqlalchemy import select
@@ -41,6 +41,7 @@ from app.modules.accommodations.models import (
     MealPlan,
     RoomType,
 )
+from app.modules.activities.models import Activity, ActivityRate
 from app.modules.currency.fx import AdminExchangeRateProvider
 from app.modules.park_fees.models import ParkFee
 from app.modules.pricing.service import PricingConfigService
@@ -69,6 +70,7 @@ from app.modules.quotes.options import (
     needs_chef,
     rate_for_occupancy,
     resolve_meal_plan,
+    room_plan,
     stay_nights,
     supplement_cost,
     supplier_paid,
@@ -191,6 +193,25 @@ class TransportCosting:
 
 
 @dataclass
+class ActivityCosting:
+    """The quote's included activities, costed once and charged into every option.
+
+    Same shape and the same reasoning as :class:`TransportCosting`: an
+    excursion belongs to the trip rather than to the hotel, so holding it per
+    option would let two options disagree about what the client is getting.
+    """
+
+    #: In the presentation currency — what enters every option's build-up.
+    total: Decimal = Decimal(0)
+    #: Already attributed to the cohort that owes it, in the fare's own currency.
+    lines: list[CostLine] = field(default_factory=list)
+    entries: list[CostEntry] = field(default_factory=list)
+    #: What the document lists as included, in the words a client reads.
+    names: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+
+
+@dataclass
 class RoomTypeQuote:
     """The cost of housing the group in one room type for the whole stay."""
 
@@ -215,6 +236,16 @@ class RoomTypeQuote:
     # and converted, which is what compares room types; this is what lets each
     # residency be priced in its own currency (§3.8).
     costed_by_residence: dict[str, dict[str, Decimal]] = field(default_factory=dict)
+    # What the children cost, where the sheet prices them separately (§3.8's
+    # last piece). Same shape and the same reason, kept apart from the rooms
+    # because it belongs to the child cohort alone: the room above is borne by
+    # the travellers it was priced for.
+    child_by_residence: dict[str, dict[str, Decimal]] = field(default_factory=dict)
+    # The residencies whose children were charged that way, so the caller knows
+    # which room lines to narrow. A residency not in here had its children
+    # counted as room occupants and charged as adults, which is what a sheet
+    # that states no child rate is saying.
+    children_priced: frozenset[str] = frozenset()
 
 
 @dataclass
@@ -284,6 +315,10 @@ class OptionCosting:
     # fields above describe the FIRST leg, because a document needs something to
     # print on one line; a package's real detail is here.
     legs: list[LegCosting] = field(default_factory=list)
+    # The mandatory activities this option includes, in the words the client
+    # reads them in. Named on the document under Included, and charged into the
+    # price above — the two facts are the same fact.
+    activities: list[str] = field(default_factory=list)
 
     @property
     def client_total(self) -> Decimal:
@@ -308,6 +343,30 @@ class OptionCosting:
         if self.cohort_prices is not None:
             return self.cohort_prices.group_total
         return self.build_up.group_total
+
+
+# The traveller type a sheet's ``child_rate`` belongs to. Infants are
+# deliberately not included: no rate sheet in the corpus states an infant rate,
+# and charging one the child rate would be inventing a price. They stay room
+# occupants, which is what they are.
+CHILD = "child"
+
+# Who bears the room itself once the children are charged separately. Naming
+# the types rather than "everybody except children" keeps it a fact about the
+# sheet — the room was priced for these travellers — instead of a subtraction.
+ROOM_BEARERS = ("adult", "infant")
+
+
+def _children_per_room(children: int, rooms: int) -> list[int]:
+    """Spread ``children`` across ``rooms``, largest share first.
+
+    Deterministic, because which row a child's rate comes from must not move
+    between two pricings of the same quote.
+    """
+    if rooms <= 0:
+        return []
+    base, extra = divmod(max(0, children), rooms)
+    return [base + (1 if index < extra else 0) for index in range(rooms)]
 
 
 # The one fee type an accommodation option implies. Conservancy, camping and the
@@ -377,6 +436,9 @@ class OptionPricingResult:
     # journey whichever hotel is chosen, and holding it per option would invite
     # someone to make it differ. Its total is inside every option's build-up.
     transport: TransportCosting = field(default_factory=lambda: TransportCosting())
+    # The included activities (§3.8), for the same reason and on the same
+    # terms: one per quote, inside every option's build-up.
+    activities: ActivityCosting = field(default_factory=lambda: ActivityCosting())
     # How many people are travelling, as :mod:`app.modules.quotes.group`
     # decided it — cohorts, else pax_count, else the traveller rows. Carried
     # out of pricing because a quote given cohorts has no ``pax_count`` at all,
@@ -420,6 +482,7 @@ class OptionPricingService:
         # journey whichever hotel is chosen, and one lookup per quote also means
         # every option is charged transport at the same fares (§3.10).
         transport = await self._transport(quote, group=group)
+        activities = await self._activities(quote, group=group)
         if transport.optional_total:
             # An add-on is priced through the same build-up as the package, so a
             # VVIP upgrade offered separately still carries contingency and
@@ -437,7 +500,9 @@ class OptionPricingService:
                 uniform_group=group.is_uniform,
             ).group_total
 
-        result = OptionPricingResult(transport=transport, pax=group.pax)
+        result = OptionPricingResult(
+            transport=transport, activities=activities, pax=group.pax
+        )
         for option in sorted(quote.options, key=lambda o: o.sort_order):
             await self._price_one(
                 quote,
@@ -449,6 +514,7 @@ class OptionPricingService:
                 profit_pct=profit,
                 rounding=cfg.rounding_for,
                 transport=transport,
+                activities=activities,
                 into=result,
             )
         return result
@@ -835,6 +901,7 @@ class OptionPricingService:
         # rounding and a 48% mark-up.
         rounding: Callable[[str], Decimal],
         transport: TransportCosting,
+        activities: ActivityCosting,
         into: OptionPricingResult,
     ) -> None:
         """Price a curated package — one property per leg (§3.9).
@@ -882,21 +949,59 @@ class OptionPricingService:
         # compares is the beds — the only thing that actually differs (§3.10).
         if transport.total:
             components["transport"] = transport.total
+        # And the excursions the client cannot decline, on the same terms: one
+        # figure for the quote, inside every option, so what the client
+        # compares is still the beds.
+        if activities.total:
+            components["activities"] = activities.total
 
-        # The room cost split by residency, merged across legs, so each residency
-        # is still priced off its own sheets in its own currency (§3.8).
-        merged_by_residence: dict[str, dict[str, Decimal]] = {}
+        # The room cost as cohort lines, one per leg, residency and currency —
+        # so each residency is still priced off its own sheets in its own
+        # currency (§3.8), and each leg keeps its own answer to whether that
+        # property prices children separately. Summing the legs first would
+        # lose that: one hotel stating a child rate and the next not is a real
+        # package, and merging them would take the children out of the second
+        # hotel's rooms without charging them a child rate there.
+        accommodation_lines: list[CostLine] = []
         for one in costed:
+            narrowed = one.room.children_priced
             for residence, buckets in one.room.costed_by_residence.items():
-                target = merged_by_residence.setdefault(residence, {})
                 for currency, amount in buckets.items():
-                    target[currency] = target.get(currency, Decimal(0)) + amount
+                    accommodation_lines.append(
+                        CostLine(
+                            label="accommodation",
+                            amount=amount,
+                            currency=currency,
+                            basis="per_group",
+                            residence=residence,
+                            bearers=(
+                                ROOM_BEARERS if residence in narrowed else ()
+                            ),
+                        )
+                    )
+            for residence, buckets in one.room.child_by_residence.items():
+                for currency, amount in buckets.items():
+                    accommodation_lines.append(
+                        CostLine(
+                            label="accommodation",
+                            amount=amount,
+                            currency=currency,
+                            basis="per_group",
+                            residence=residence,
+                            traveller_type=CHILD,
+                        )
+                    )
 
-        park_lines = [line for one in costed for line in one.park_lines]
+        # Everything already attributed to the cohort that owes it: park entry
+        # and the included activities, each in the currency its schedule is
+        # published in.
+        included_lines = [line for one in costed for line in one.park_lines]
+        included_lines.extend(activities.lines)
         # The whole option's worksheet: its legs' lines in itinerary order,
         # then the journey, which belongs to the quote and is charged into
         # every option (§3.10).
         entries = [entry for one in costed for entry in one.entries]
+        entries.extend(activities.entries)
         entries.extend(transport.entries)
         supplements = [charge for one in costed for charge in one.supplements]
         warnings = [
@@ -905,6 +1010,7 @@ class OptionPricingService:
             for one in costed
             for note in one.warnings
         ]
+        warnings.extend(activities.warnings)
         warnings.extend(transport.warnings)
         paid_total = sum((one.room.paid_total for one in costed), Decimal(0))
         costed_total = sum((one.room.costed_total for one in costed), Decimal(0))
@@ -922,13 +1028,10 @@ class OptionPricingService:
             # group got one per-person figure covering two currencies.
             uniform_group=group.is_uniform,
         )
-        # ``best`` is handed the merged per-residency split, so a package's
-        # accommodation lines reach the right cohorts across every leg.
-        merged = replace(lead.room, costed_by_residence=merged_by_residence)
         cohort_prices = await self._per_cohort(
             quote,
-            merged,
-            direct_lines=park_lines + transport.lines,
+            accommodation=accommodation_lines,
+            direct_lines=included_lines + transport.lines,
             shared=components,
             capacity_of=lead.room.room_type_id,
             group=group,
@@ -976,6 +1079,7 @@ class OptionPricingService:
                 cohort_prices=cohort_prices,
                 entries=entries,
                 legs=costed,
+                activities=list(activities.names),
             )
         )
 
@@ -1001,20 +1105,44 @@ class OptionPricingService:
         three: no room can hold one of each and still have a defined rate. The
         extra room is the honest cost of a mixed group being quotable, and it
         appears here rather than being discovered at check-in.
+
+        Children are the second partition (§3.8's last piece). Where the sheet
+        states a ``child_rate`` for every night of the stay, the rooms are
+        priced for the travellers they were quoted for and each child is
+        charged its own rate as the extra bed the sheet is describing — so two
+        adults and two children take one twin, not two, and the children are
+        not charged an adult's share of a room. Where the sheet is silent the
+        old behaviour stands exactly: the child counts as an occupant and is
+        charged as an adult, because a property that publishes no child rate is
+        not offering a child discount and inventing one would quote a price
+        nobody has to honour.
         """
         room_type = await self.db.get(RoomType, room_type_id)
         if room_type is None or not room_type.is_active:
             return None
 
-        rooming = group.rooming(room_type.max_occupancy)
+        sharing = self._child_sharing(
+            per_residence, group, capacity=room_type.max_occupancy, nights=nights
+        )
+        rooming = group.rooming(
+            room_type.max_occupancy,
+            occupants={
+                residence: group.headcount(residence)
+                - group.count_of(residence, CHILD)
+                for residence in sharing
+            },
+        )
         plan: list[int] = []
         paid: dict[str, Decimal] = {}
         costed: dict[str, Decimal] = {}
         by_residence: dict[str, dict[str, Decimal]] = {}
+        child_by_residence: dict[str, dict[str, Decimal]] = {}
         derived: set[int] = set()
         per_person_basis: set[str] = set()
         # (rate row, guests in the room, residency) -> room-nights charged.
         used_rates: dict[tuple[uuid.UUID, int, str], list] = {}
+        # (rate row, residency) -> child-nights charged at that row's child rate.
+        used_child: dict[tuple[uuid.UUID, str], list] = {}
         for residence, rooms in rooming.items():
             nightly = per_residence.get(residence)
             if not nightly:
@@ -1024,11 +1152,20 @@ class OptionPricingService:
                 # quote anybody could honour.
                 return None
             plan.extend(rooms)
+            # Which room each child sleeps in, so its rate comes from the row
+            # that priced that room. Spread rather than piled into the first
+            # room: two families sharing a quote are two rooms with a child in
+            # each, and a sheet whose child rate varies by occupancy would
+            # otherwise charge both children off one room's row.
+            in_room = _children_per_room(
+                group.count_of(residence, CHILD) if residence in sharing else 0,
+                len(rooms),
+            )
             for night in nights:
                 by_occupancy = nightly.get(night)
                 if not by_occupancy:
                     return None
-                for guests in rooms:
+                for index, guests in enumerate(rooms):
                     found = rate_for_occupancy(by_occupancy, guests)
                     if found is None:
                         return None
@@ -1056,6 +1193,34 @@ class OptionPricingService:
                         used_rates[slot][0] += 1
                     else:
                         used_rates[slot] = [1, rate]
+
+                    kids = in_room[index]
+                    if not kids:
+                        continue
+                    # Not None: ``_child_sharing`` only names a residency whose
+                    # every night and occupancy states one.
+                    assert rate.child_rate is not None
+                    # Treated exactly as the room rate is — an STO child rate
+                    # is already an operator rate and a rack one spends half
+                    # its stated discount on the client (§3.5). A child bed
+                    # bought off the same sheet is bought on the same terms.
+                    paid[currency] = paid.get(currency, Decimal(0)) + supplier_paid(
+                        rate.child_rate, rate.supplier_discount_pct
+                    ) * kids
+                    child_charge = (
+                        costed_rate(
+                            rate.child_rate, rate.supplier_discount_pct, rate.rate_kind
+                        )
+                        * kids
+                    )
+                    costed[currency] = costed.get(currency, Decimal(0)) + child_charge
+                    theirs = child_by_residence.setdefault(residence, {})
+                    theirs[currency] = theirs.get(currency, Decimal(0)) + child_charge
+                    cot = (rate.id, residence)
+                    if cot in used_child:
+                        used_child[cot][0] += kids
+                    else:
+                        used_child[cot] = [kids, rate]
 
         warnings: list[str] = []
         if derived:
@@ -1103,6 +1268,34 @@ class OptionPricingService:
             )
             for (_, guests, residence), (room_nights, rate) in used_rates.items()
         ]
+        entries.extend(
+            CostEntry(
+                label=f"{room_type.name}, child sharing ({residence})",
+                component="accommodation",
+                # Per child per night, which is what the sheet's own column
+                # says — and a different multiplier from the room above it, so
+                # the two cannot be added up by eye without both bases stated.
+                basis="per_person_per_night",
+                unit_amount=costed_rate(
+                    rate.child_rate, rate.supplier_discount_pct, rate.rate_kind
+                ),
+                quantity=child_nights,
+                currency=rate.currency.upper(),
+                extended=costed_rate(
+                    rate.child_rate, rate.supplier_discount_pct, rate.rate_kind
+                )
+                * child_nights,
+                source=_rate_source(rate),
+                residence=residence,
+                traveller_type=CHILD,
+                sheet_amount=rate.child_rate,
+                paid_amount=supplier_paid(
+                    rate.child_rate, rate.supplier_discount_pct
+                ),
+            )
+            for (_, residence), (child_nights, rate) in used_child.items()
+            if rate.child_rate is not None
+        )
         paid_total = await self._to_presentation(quote, paid)
         costed_total = await self._to_presentation(quote, costed)
         return (
@@ -1117,10 +1310,64 @@ class OptionPricingService:
                 derived_occupancies=tuple(sorted(derived)),
                 warnings=warnings,
                 costed_by_residence=by_residence,
+                child_by_residence=child_by_residence,
+                children_priced=sharing,
                 entries=entries,
             ),
             None,
         )
+
+    @staticmethod
+    def _child_sharing(
+        per_residence: dict[str, dict[date, dict[int, AccommodationRate]]],
+        group: Group,
+        *,
+        capacity: int,
+        nights: list[date],
+    ) -> frozenset[str]:
+        """The residencies whose children this sheet prices separately.
+
+        All-or-nothing per residency, and deliberately so: a stay whose child
+        rate covers four nights of five would otherwise be priced with the
+        children in the room for one night and beside it for the others, which
+        is neither of the two things the sheet could mean and reconciles with
+        nothing. So a gap anywhere in the stay puts that residency back on the
+        plain rule — children as occupants, charged as adults — and the whole
+        option stays internally consistent.
+
+        Probed with the same occupancy selection the costing uses, so the rows
+        checked here are the rows charged there.
+        """
+        out: set[str] = set()
+        for residence in group.residences:
+            children = group.count_of(residence, CHILD)
+            occupants = group.headcount(residence) - children
+            # A residency travelling as children only has no room for them to
+            # share, so there is no extra bed to charge and the rooms have to
+            # be priced for them. Rare, and an unaccompanied-minors group is
+            # not something to silently leave without a bed.
+            if not children or occupants <= 0:
+                continue
+            nightly = per_residence.get(residence)
+            if not nightly:
+                continue
+            rooms = room_plan(occupants, capacity)
+            stated = True
+            for night in nights:
+                by_occupancy = nightly.get(night)
+                if not by_occupancy:
+                    stated = False
+                    break
+                for guests in rooms:
+                    found = rate_for_occupancy(by_occupancy, guests)
+                    if found is None or found[1].child_rate is None:
+                        stated = False
+                        break
+                if not stated:
+                    break
+            if stated:
+                out.add(residence)
+        return frozenset(out)
 
     # -- lookups ------------------------------------------------------------- #
 
@@ -1211,8 +1458,8 @@ class OptionPricingService:
     async def _per_cohort(
         self,
         quote: Quote,
-        best: RoomTypeQuote,
         *,
+        accommodation: list[CostLine],
         direct_lines: list[CostLine],
         shared: dict[str, Decimal],
         capacity_of: uuid.UUID,
@@ -1230,18 +1477,22 @@ class OptionPricingService:
         group total for the whole booking.
 
         ``direct_lines`` are the costs that already know who bears them and in
-        which currency — park fees, and the transport tariffs (§3.10) — so they
-        are attributed as they stand rather than re-derived from a presentation
-        currency total.
+        which currency — park fees, the included activities, and the transport
+        tariffs (§3.10) — so they are attributed as they stand rather than
+        re-derived from a presentation currency total.
 
         Three shapes of cost line, and which cohorts each reaches is the whole
         design:
 
         * **Accommodation** names a residency and no traveller type, so it is
           shared within that residency — a resident adult and a resident child
-          sleep in the same rooms off the same sheet.
-        * **Park fees** name a residency *and* a type, because a resident child
-          pays the resident child rate and nobody else shares that line.
+          sleep in the same rooms off the same sheet. Unless the sheet prices
+          the children, in which case the room names the travellers it was
+          priced for (``bearers``) and the children carry a line of their own:
+          a child on an extra bed is not paying a share of the room.
+        * **Park fees and included activities** name a residency *and* a type,
+          because a resident child pays the resident child rate and nobody else
+          shares that line.
         * **Transport** names neither and is already multiplied out, because a
           seat costs the same whoever is in it.
         * **Supplements, chef and food** name neither, so they split per head
@@ -1258,24 +1509,17 @@ class OptionPricingService:
             return None
         presentation = quote.presentation_currency.upper()
 
-        lines: list[CostLine] = [
-            CostLine(
-                label="accommodation",
-                amount=amount,
-                currency=currency,
-                basis="per_group",
-                residence=residence,
-            )
-            for residence, buckets in best.costed_by_residence.items()
-            for currency, amount in buckets.items()
-        ]
+        lines: list[CostLine] = list(accommodation)
         lines.extend(direct_lines)
         # Everything the whole group shares. Already in the presentation
         # currency, since that is how the components dict is built. The labels
         # skipped here are the ones already above as direct lines — adding the
         # component total as well would charge them twice.
         for label, amount in shared.items():
-            if label in {"accommodation", "park_fees", "transport"} or amount == 0:
+            if (
+                label in {"accommodation", "park_fees", "activities", "transport"}
+                or amount == 0
+            ):
                 continue
             lines.append(
                 CostLine(
@@ -1502,6 +1746,176 @@ class OptionPricingService:
             lines,
             entries,
         )
+
+    # -- mandatory activities ------------------------------------------------ #
+
+    async def _activities(self, quote: Quote, *, group: Group) -> ActivityCosting:
+        """The activities on the quote that the client cannot decline (§3.8).
+
+        ``Activity.is_mandatory`` has been on the model since §3.1 and nothing
+        has ever charged it. An included excursion — the reference proposal
+        gives the Wasini Island trip a page of its own — was therefore named on
+        the document and paid for by nobody, which is the same shape of hole
+        transport had before §3.10 and park entry before §3.8.
+
+        **What ``is_mandatory`` decides is the treatment, not the scope.** The
+        scope is the agent's own selection: an activity is on the quote because
+        somebody put it there, and the flag then says it is costed into the
+        package price and listed under Included rather than offered beside it as
+        a priced extra. The alternative — charging every mandatory activity at
+        the destination — reads well until a beach quote silently buys twenty
+        five people a dhow cruise nobody asked for. A destination-wide charge
+        that really does apply to every visitor is a park or conservancy fee,
+        and those are :meth:`_park_fees`.
+
+        Priced **once per person**, and the fare depends on the cohort: a
+        resident child pays the resident child fare and nobody else shares that
+        line, exactly as with park entry. Which is what makes this the last
+        piece of the vector — it was the one remaining cost still charged at a
+        single rate to everybody.
+
+        Costed once for the quote and charged into every option, like the
+        journey: the excursion does not change with the hotel, so holding it per
+        option would only invite the two to differ.
+        """
+        selected: dict[uuid.UUID, int | None] = {}
+        for leg in quote.legs:
+            for row in leg.activities:
+                # First selection wins the day. Selecting one activity twice is
+                # not something this model expresses — a repeated excursion is
+                # an itinerary question, which is Stage 4.
+                selected.setdefault(row.activity_id, row.day)
+        if not selected:
+            return ActivityCosting()
+
+        included = list(
+            (
+                await self.db.execute(
+                    select(Activity).where(
+                        Activity.id.in_(selected),
+                        Activity.is_mandatory.is_(True),
+                        Activity.is_active.is_(True),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        if not included:
+            return ActivityCosting()
+
+        residences = await residence_ids(self.db, group.residences)
+        by_id = {value: name for name, value in residences.items()}
+        # The fare in force on the day it happens, where the agent has said
+        # which day. Day 1 is the arrival date, so a rate revision mid-trip
+        # prices the excursion at the fare that will actually be charged.
+        days = {
+            one.id: quote.arrival_date
+            + timedelta(days=max(1, selected.get(one.id) or 1) - 1)
+            for one in included
+        }
+        rows = list(
+            (
+                await self.db.execute(
+                    select(ActivityRate).where(
+                        ActivityRate.activity_id.in_([one.id for one in included]),
+                        ActivityRate.residence_category_id.in_(residences.values()),
+                        ActivityRate.is_active.is_(True),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        index: dict[tuple[uuid.UUID, str], ActivityRate] = {}
+        for rate in rows:
+            residence = by_id.get(rate.residence_category_id)
+            if residence is None:
+                continue
+            on = days.get(rate.activity_id)
+            if on is None or not (rate.effective_from <= on <= rate.effective_to):
+                continue
+            key = (rate.activity_id, residence)
+            current = index.get(key)
+            if current is None or rate.effective_from > current.effective_from:
+                index[key] = rate
+
+        costing = ActivityCosting()
+        per_currency: dict[str, Decimal] = {}
+        uncovered: dict[str, set[str]] = {}
+        assumed: set[str] = set()
+        for activity in sorted(included, key=lambda one: one.name):
+            costing.names.append(activity.name)
+            for cohort in group.cohorts:
+                fare = index.get((activity.id, cohort.residence))
+                if fare is None:
+                    uncovered.setdefault(activity.name, set()).add(cohort.residence)
+                    continue
+                amount = {
+                    "adult": fare.adult_price,
+                    CHILD: fare.child_price,
+                }.get(cohort.traveller_type)
+                if amount is None:
+                    # No sheet in the corpus prices an infant separately, so
+                    # the adult fare stands and is said out loud. It errs
+                    # toward over-charging, which is the visible direction —
+                    # and a boat that carries a lap infant free is a discount
+                    # to ask the supplier for, not one to assume.
+                    amount = fare.adult_price
+                    assumed.add(cohort.traveller_type)
+                currency = fare.currency.upper()
+                charge = amount * cohort.count
+                if charge == 0:
+                    continue
+                per_currency[currency] = (
+                    per_currency.get(currency, Decimal(0)) + charge
+                )
+                costing.lines.append(
+                    CostLine(
+                        label="activities",
+                        amount=charge,
+                        currency=currency,
+                        basis="per_group",
+                        residence=cohort.residence,
+                        traveller_type=cohort.traveller_type,
+                    )
+                )
+                costing.entries.append(
+                    CostEntry(
+                        label=(
+                            f"{activity.name} — included "
+                            f"({cohort.residence} {cohort.traveller_type})"
+                        ),
+                        component="activities",
+                        basis="per_person",
+                        unit_amount=amount,
+                        quantity=cohort.count,
+                        currency=currency,
+                        extended=charge,
+                        source=(
+                            f"activity_rates {fare.id} · {activity.name} from "
+                            f"{fare.effective_from}"
+                        ),
+                        residence=cohort.residence,
+                        traveller_type=cohort.traveller_type,
+                    )
+                )
+
+        for name, missing in sorted(uncovered.items()):
+            costing.warnings.append(
+                f"{name} is included in this quote but no rate is on file for "
+                f"{', '.join(sorted(missing))} on the day it falls, so those "
+                f"travellers are quoted without it. Load the rate before "
+                f"issuing."
+            )
+        if assumed:
+            costing.warnings.append(
+                f"included activities are charged at the adult fare for "
+                f"{', '.join(sorted(assumed))} travellers, because the rates "
+                f"state an adult and a child price and nothing else"
+            )
+        costing.total = await self._to_presentation(quote, per_currency)
+        return costing
 
     # -- transport ----------------------------------------------------------- #
 

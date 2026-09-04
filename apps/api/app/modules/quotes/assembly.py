@@ -777,6 +777,11 @@ def _snapshot(
                 "group_total": str(o.build_up.group_total),
                 "client_total": str(o.client_total),
                 "warnings": list(o.warnings),
+                # What the destination includes and the price therefore covers
+                # (the last of §3.8). Frozen with the figures: an activity made
+                # optional next season must not change what this version says
+                # the client was offered.
+                "activities": list(o.activities),
                 # The itinerary as quoted (§3.9). Frozen per leg, not derived
                 # from the option row, because a package's legs can be re-dated
                 # or re-pointed afterwards and the document has to keep saying

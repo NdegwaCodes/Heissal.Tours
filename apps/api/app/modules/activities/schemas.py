@@ -15,6 +15,12 @@ class ActivityBase(BaseModel):
     duration_minutes: int | None = None
     is_optional: bool = True
     is_active: bool = True
+    # A mandatory activity is costed into the package and named under the
+    # document's Included list; an optional one is priced beside it. The column
+    # has existed since §3.1 and nothing could set it, which made every
+    # activity optional in practice — the same gap the transport segments had.
+    is_mandatory: bool = False
+    has_own_section: bool = False
 
 
 class ActivityCreate(ActivityBase):
@@ -29,6 +35,8 @@ class ActivityUpdate(BaseModel):
     duration_minutes: int | None = None
     is_optional: bool | None = None
     is_active: bool | None = None
+    is_mandatory: bool | None = None
+    has_own_section: bool | None = None
 
 
 class ActivityRead(ActivityBase):

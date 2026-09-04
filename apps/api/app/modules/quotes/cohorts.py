@@ -243,9 +243,20 @@ class Group:
             cohort for cohort in self.cohorts if cohort.residence == residence
         )
 
+    def count_of(self, residence: str, traveller_type: str) -> int:
+        """How many travellers of one type in one residency — zero if none."""
+        return sum(
+            cohort.count
+            for cohort in self.cohorts
+            if cohort.residence == residence
+            and cohort.traveller_type == traveller_type
+        )
+
     # -- the two partitions ------------------------------------------------- #
 
-    def rooming(self, capacity: int) -> dict[str, list[int]]:
+    def rooming(
+        self, capacity: int, *, occupants: dict[str, int] | None = None
+    ) -> dict[str, list[int]]:
         """Rooms per residency, as the number of guests sleeping in each.
 
         Split by residency **only** — see the module docstring. The cost of this
@@ -253,9 +264,21 @@ class Group:
         non-residents need four rooms in twins, not three, because no room can
         hold one of each and still have a defined rate. That is the price of
         mixed-residency groups being quotable at all.
+
+        ``occupants`` overrides the headcount a residency's rooms are *priced
+        for*, which is what a sheet's child rate makes necessary: where a
+        property quotes "child sharing, 4,500 per night", the room itself is
+        priced for the adults in it and the child is a separately charged extra
+        bed. Counting the child into the occupancy as well would either book a
+        room nobody sleeps in or charge one room-night twice. A residency absent
+        from the mapping keeps its full headcount, so the ordinary case is
+        untouched.
         """
+        override = occupants or {}
         return {
-            residence: room_plan(self.headcount(residence), capacity)
+            residence: room_plan(
+                override.get(residence, self.headcount(residence)), capacity
+            )
             for residence in self.residences
         }
 
@@ -312,6 +335,13 @@ class CostLine:
     basis: str
     residence: str | None = None
     traveller_type: str | None = None
+    #: Which traveller types within ``residence`` bear this line, where not all
+    #: of them do. The room rate needs it: once a sheet prices children
+    #: separately (``child_rate``), the room is borne by the travellers it was
+    #: priced for and not by the child on an extra bed, so "shared within this
+    #: residency" is no longer the same set as "everyone in this residency".
+    #: Empty means all of them, which is the ordinary case.
+    bearers: tuple[str, ...] = ()
     nights: int = 0
     days: int = 0
     rooms: int = 0
@@ -322,6 +352,16 @@ class CostLine:
             raise ValueError(f"unknown cost basis: {self.basis!r}")
         if self.amount < 0:
             raise ValueError(f"cost line {self.label!r} is negative")
+        if self.bearers and self.traveller_type is not None:
+            raise ValueError(
+                f"cost line {self.label!r} names both a traveller type and a set "
+                "of bearers; one line belongs either to one cohort or to several"
+            )
+        if self.bearers and self.residence is None:
+            raise ValueError(
+                f"cost line {self.label!r} names bearers without a residence; "
+                "a set of traveller types spanning two sheets is not one line"
+            )
         if self.traveller_type is not None and self.residence is None:
             # A line for "all children regardless of residency" would have to be
             # priced at two different rates at once, so it is not expressible.
@@ -401,11 +441,26 @@ def attribute(
                 if cohort.residence == line.residence
                 and cohort.traveller_type == line.traveller_type
             ]
+        elif line.residence is not None and line.bearers:
+            targets = [
+                cohort for cohort in group.cohorts_in(line.residence)
+                if cohort.traveller_type in line.bearers
+            ]
         elif line.residence is not None:
             targets = list(group.cohorts_in(line.residence))
         else:
             targets = list(group.cohorts)
 
+        if not targets and line.bearers:
+            # Not the same case as below. A line naming several bearers is a
+            # cost somebody definitely owes — a room — narrowed to the
+            # travellers it was priced for. Nobody left to bear it means the
+            # caller narrowed it wrongly, and dropping it would quietly remove
+            # the accommodation from the quote.
+            raise ValueError(
+                f"cost line {line.label!r} names bearers {sorted(line.bearers)} "
+                f"but no {line.residence} cohort is one of them"
+            )
         if not targets:
             # A line for a cohort nobody is in — a child rate on an all-adult
             # group. Silently dropping it is right: the alternative is charging

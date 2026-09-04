@@ -185,6 +185,7 @@ def _client_option(costing: OptionCosting) -> QuoteOptionClientRead:
         # rows on the document add up to.
         group_total=costing.client_total,
         is_comparable=costing.is_comparable,
+        activities=list(costing.activities),
         cohorts=[
             CohortPriceRead(
                 residence=price.cohort.residence,

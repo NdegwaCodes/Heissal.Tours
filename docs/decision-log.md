@@ -1084,3 +1084,46 @@ is what the client schema, the document and the version's `selling_total` and ma
 the revenue figure has to be the one on the invoice. The whole-group `build_up` is untouched:
 it is the internal worksheet, and the worksheet prints **both**, because the gap is something
 an operator reconciling an invoice should see rather than rediscover.
+
+**A stated child rate prices the room for the adults and the child as an extra bed**
+(Stage 3B, 2026-09-04)
+`accommodation_rates.child_rate` had been in the schema since §3.1 and nothing read it, so a
+child was an ordinary occupant: counted into the rooming, given a share of a room, and charged
+what an adult is charged. That was wrong in two directions at once — the group was quoted a
+room it does not need (two adults and two children in twins came out as two rooms, when the
+sheet is selling one room and two extra beds) and the children were charged an adult's share
+instead of the figure the supplier publishes for them. A family quote was therefore both
+over-priced and unreconcilable against its own sheet.
+
+Now: where the sheet states a child rate, the rooms are priced for the travellers they were
+quoted for and each child is charged its own rate per night. `Group.rooming` takes an
+occupancy override and `CostLine` takes `bearers`, so the room reaches the adults it was priced
+for and the children carry a line of their own — the same night can no longer be billed from
+two directions.
+
+Three deliberate limits. **All or nothing per residency**: a stay whose child rate covers four
+nights of five falls back to the plain rule entirely, because pricing the children inside the
+room for one night and beside it for the others is neither of the two things the sheet could
+mean. **Silence is not a discount**: a property that publishes no child rate charges the child
+as an adult, exactly as before. **Infants stay occupants**: no sheet in the corpus prices one,
+and treating them as children would be inventing a rate.
+
+**`is_mandatory` on an activity decides the treatment, not the scope** (Stage 3B, 2026-09-04)
+Included excursions were the last cost outside the vector: `Activity.is_mandatory` had been on
+the model since §3.1 and nothing charged it, so the reference proposal's Wasini Island day was
+named on the document and paid for by nobody.
+
+Built first as a destination-wide charge — every mandatory activity at a destination, on every
+quote to it — on the reasoning that an agent then cannot forget one. Twenty-six existing tests
+failed in unison, all of them Diani accommodation cases picking up the demo catalogue's dhow
+cruise, and they were right: a beach quote must not silently buy twenty-five people a boat
+trip. The scope is the agent's **selection** (`quote_legs.activities`, which already exists);
+the flag says the client cannot decline it, so it is costed into the package and listed under
+Included rather than offered beside it with a price. A charge that genuinely applies to every
+visitor to a place is a park or conservancy fee, and those are `_park_fees`.
+
+Priced once per person at the fare in force **on the day the agent scheduled it**, per cohort —
+a resident child pays the resident child fare — and costed once for the quote and charged into
+every option, like the journey (§3.10): an excursion does not change with the hotel. The
+selection row's own adult/child counts are deliberately ignored; the group vector is the one
+answer to who is travelling (§3.8), and a second headcount could only disagree with it.

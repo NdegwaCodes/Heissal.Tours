@@ -648,3 +648,127 @@ def test_attribution_loses_nothing():
     )
     assert kes == D("400000") + D("24000")
     assert usd == D("3000")
+
+
+# --------------------------------------------------------------------------- #
+# Children on the vector: the room they share, and the bed they are charged for
+# --------------------------------------------------------------------------- #
+#
+# The last piece of §3.8. A sheet that states a child rate is describing an
+# extra bed in the adults' room, so the room is priced for the adults and the
+# child is charged its own rate. Two things in the pure layer make that
+# expressible: an occupancy override on the rooming, and a line that names
+# which traveller types bear it.
+
+
+def test_children_do_not_add_rooms_when_the_sheet_prices_them():
+    """Two adults and two children in twins is one room, not two.
+
+    The default is unchanged — four occupants take two twins — and the override
+    is what a stated child rate buys: the room is priced for the two travellers
+    it was quoted for.
+    """
+    group = _group(("citizen", "adult", 2), ("citizen", "child", 2))
+    assert group.rooming(2) == {"citizen": [2, 2]}
+    assert group.rooming(2, occupants={"citizen": 2}) == {"citizen": [2]}
+
+
+def test_a_residency_left_out_of_the_override_keeps_its_headcount():
+    """One property in a package states a child rate and the next does not."""
+    group = _group(
+        ("citizen", "adult", 2),
+        ("citizen", "child", 1),
+        ("non_resident", "adult", 2),
+        ("non_resident", "child", 1),
+    )
+    rooming = group.rooming(2, occupants={"citizen": 2})
+    assert rooming == {"citizen": [2], "non_resident": [2, 1]}
+
+
+def test_count_of_names_one_cohort():
+    group = _group(("citizen", "adult", 2), ("citizen", "child", 3))
+    assert group.count_of("citizen", "child") == 3
+    assert group.count_of("citizen", "infant") == 0
+    assert group.count_of("non_resident", "adult") == 0
+
+
+def test_a_room_line_reaches_only_the_travellers_it_was_priced_for():
+    """60,000 of rooms and 30,000 of child beds, split as the sheet charges them.
+
+    Without ``bearers`` the room would be shared across the whole residency, and
+    the children would pay a share of a room they are charged an extra bed for
+    — the same night billed twice from two directions.
+    """
+    group = _group(("citizen", "adult", 2), ("citizen", "child", 2))
+    lines = [
+        CostLine(
+            "accommodation", D("60000"), KES, "per_group",
+            residence="citizen", bearers=("adult", "infant"),
+        ),
+        CostLine(
+            "accommodation", D("30000"), KES, "per_group",
+            residence="citizen", traveller_type="child",
+        ),
+    ]
+    attributed = attribute(lines, group, capacity=2)
+    assert attributed["citizen:adult"] == {"accommodation": D("60000")}
+    assert attributed["citizen:child"] == {"accommodation": D("30000")}
+
+
+def test_bearers_and_a_traveller_type_on_one_line_is_refused():
+    with pytest.raises(ValueError, match="either to one cohort or to several"):
+        CostLine(
+            "accommodation", D("1"), KES, "per_group",
+            residence="citizen", traveller_type="child", bearers=("adult",),
+        )
+
+
+def test_bearers_without_a_residence_is_refused():
+    with pytest.raises(ValueError, match="two sheets is not one line"):
+        CostLine("accommodation", D("1"), KES, "per_group", bearers=("adult",))
+
+
+def test_a_room_nobody_is_left_to_bear_is_an_error_not_a_silent_drop():
+    """A cohort line for nobody is dropped; a room for nobody is a bug.
+
+    The difference matters: dropping a child fare on an all-adult group is
+    correct, and dropping the accommodation would quote a holiday with no beds
+    in it and no sign that anything was missing.
+    """
+    children_only = _group(("citizen", "child", 2))
+    with pytest.raises(ValueError, match="no citizen cohort is one of them"):
+        attribute(
+            [
+                CostLine(
+                    "accommodation", D("60000"), KES, "per_group",
+                    residence="citizen", bearers=("adult", "infant"),
+                )
+            ],
+            children_only,
+            capacity=2,
+        )
+
+
+def test_the_cohort_totals_still_sum_to_the_group_total_with_a_child_bed():
+    """The invariant this whole design exists for, on the new shape of line."""
+    group = _group(("citizen", "adult", 2), ("citizen", "child", 2))
+    priced = _price(
+        group,
+        [
+            CostLine(
+                "accommodation", D("60000"), KES, "per_group",
+                residence="citizen", bearers=("adult", "infant"),
+            ),
+            CostLine(
+                "accommodation", D("30000"), KES, "per_group",
+                residence="citizen", traveller_type="child",
+            ),
+        ],
+    )
+    assert priced.group_total == sum(price.total for price in priced.cohorts)
+    for price in priced.cohorts:
+        assert price.total == price.per_person * price.cohort.count
+    # And the child is cheaper than the adult, which is the point of all of it.
+    child = next(p for p in priced.cohorts if p.cohort.traveller_type == "child")
+    adult = next(p for p in priced.cohorts if p.cohort.traveller_type == "adult")
+    assert child.per_person < adult.per_person

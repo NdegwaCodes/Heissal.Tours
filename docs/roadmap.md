@@ -116,7 +116,19 @@ backend-only and the client sees per-person and group totals only.
     cohort's `per_person × headcount = total` is asserted, not assumed. The whole-group
     `build_up` stays as the internal worksheet in the presentation currency; the cohort rows sit
     beside it rather than replacing it (see decision log for why)
-  - ☐ **Remaining:** mandatory activities and child *accommodation* rates on the vector
+  - ☑ **Child accommodation rates on the vector** (`test_option_child_rates.py`, 8 tests) —
+    where a sheet states a `child_rate`, the rooms are priced for the travellers they were
+    quoted for and each child is charged its own rate as the extra bed the sheet describes. Two
+    adults and two children in twins is one room and two child beds, not two rooms of adults:
+    the old behaviour over-priced the stay *and* charged the children a figure appearing on no
+    sheet. All or nothing per residency, silence is not a discount, infants stay occupants —
+    see the decision log
+  - ☑ **Included activities on the vector** (`test_included_activities.py`, 12 tests) —
+    `is_mandatory` decides the *treatment*: an activity the agent put on the quote is costed
+    into the package and listed under Included rather than offered beside it. Charged once per
+    person at the fare in force on the day it falls, per cohort, in each cohort's own currency;
+    costed once for the quote and charged into every option, like the journey. Built first as a
+    destination-wide charge, which twenty-six tests correctly refused
 - ☑ 3.12 Rate importer (`app/modules/rate_intake/`, 50 tests) — reads a filled-in intake sheet
   from .xlsx or .csv, normalises it, and writes destinations, properties, room types, rates and
   supplements with a two-pass dry-run/commit split. Verified against the client's real 3,161-row
