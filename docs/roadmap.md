@@ -265,9 +265,25 @@ sources normalised ×1.16) so the engine adds no tax on top; margin, contingency
 supplier/STO rates are **backend only**; per-person is rounded up to the nearest 100 and
 the group total derived from it so the two always reconcile.
 
-## Stage 4 — Itinerary Engine  ☐
-- Destinations · Route data · Distance/time calculation · Fuel calculation
-- Route sequencing · Itinerary scoring · AI-generated narrative
+## Stage 4 — Itinerary Engine  ◑
+- ☑ 4.1 **The day-by-day programme** (`app/modules/quotes/itinerary.py`, 34 tests) — the legs,
+  the journey and the excursions laid on a calendar, frozen per option into the version and
+  rendered as the proposal's itinerary page. Pure derivation: every input already existed, and
+  putting them on one calendar is what shows whether they agree
+  - A trip has **one more day than it has nights**, and a day belongs to the leg that holds its
+    **night** — the §3.9 convention that lets two contiguous legs share a date. The day a
+    package changes hotels names both properties; the departure day says checkout and promises
+    no meals it did not sell
+  - It closed a real hole: excursion fares are picked by **day number** (§3.8) and transfer
+    tariffs by **travel date** (§3.10), and nothing checked either against the trip. A day off
+    the trip is now blocking and refused at creation — see the decision log
+  - An undated movement appears on no day and is reported instead. Placing it on the arrival day
+    (where it prices) put a rail return's six movements all on day one
+- ☐ Route data · distance/time calculation · fuel calculation — needs road distances between
+  destinations, which the catalogue does not hold: `destinations` has lat/long only, and a
+  great-circle line is not a Kenyan road. Stage 2.8's engine still costs fuel off an
+  agent-entered `estimated_km`
+- ☐ Route sequencing · itinerary scoring · AI-generated narrative
 
 ## Stage 5 — CRM  ☐
 - Leads · Pipeline · Follow-ups · Communications · Quote tracking · Conversion analytics

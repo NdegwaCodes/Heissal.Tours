@@ -1127,3 +1127,48 @@ a resident child pays the resident child fare — and costed once for the quote 
 every option, like the journey (§3.10): an excursion does not change with the hotel. The
 selection row's own adult/child counts are deliberately ignored; the group vector is the one
 answer to who is travelling (§3.8), and a second headcount could only disagree with it.
+
+**A trip has one more day than it has nights** (Stage 4.1, 2026-09-04)
+The day-by-day programme is derivation rather than new data — legs already hold dates, movements
+already hold travel dates, activity selections already hold a day number — and laying those on a
+calendar is the only way to see whether they agree. Three rules fix its shape. Arrival and
+departure are both days, so a 1–4 July booking is three nights and **four** days and the fourth
+is the one with the flight home on it; counting days as nights loses it. A day belongs to the leg
+that holds its **night**, which is the same convention that lets two contiguous legs share a date
+without charging it twice (§3.9). And the words belong to the document: the pure layer names
+board by its plan code, the viewmodel decides how a proposal phrases it.
+
+Two consequences worth recording. The departure day says **checkout and nothing about meals** —
+it has no night under it, so printing the last leg's basis would promise a lunch and a dinner
+nobody bought, and printing "breakfast" instead is right only until a room-only leg makes it
+wrong. And the day a package **changes hotels names both** properties: that day belongs to the
+leg whose night it is, so without it the page reads as though the client woke up where they went
+to bed, and the move is the one thing on a day-by-day they cannot work out for themselves.
+
+**An undated movement appears on no day** (Stage 4.1, 2026-09-04)
+Built the other way first, on the reasoning that an undated segment is *priced* at the arrival
+date's tariff (§3.10) so the page should agree with the price. A rail return with its four
+mandatory transfers showed what that means: all six movements piled onto day one, so the client's
+page said the transfer home ran the day they landed. Caught by an existing 3.11 test counting how
+often one label appears. An incomplete programme with an advisory against it is honest; a
+confident wrong one is not — and which tariff a fare is picked at is a separate question from
+which day a page claims.
+
+**A day off the trip is refused at creation, and it is a mis-price** (Stage 4.1, 2026-09-04)
+Excursion fares are selected by day number (§3.8) and transfer tariffs by travel date (§3.10),
+which made the day numbers something priced against before anything checked them. An excursion on
+day nine of a four-day trip takes its fare from a date the group is not in the country; a movement
+dated a month out prices off a tariff window it will not be charged at. Both quote perfectly
+cleanly, and nothing on the finished document shows either — so both are blocking, and both are
+refused at creation where the agent can still fix them rather than only at readiness. The two
+advisories (an unscheduled excursion, an undated movement) are presentation gaps: the price is
+right and the programme is incomplete, which is a document to finish rather than a figure to fix.
+
+**One programme page, for the recommended option** (Stage 4.1, 2026-09-04)
+Every option carries its own frozen programme, because which day a client is in the Mara depends
+on the package. Printing all of them is five near-identical pages of one journey, so the document
+prints the recommended option's — the one it leads on everywhere else — and only where the trip
+has a shape to describe: a journey, an excursion, or more than one property. A four-day beach stay
+would otherwise produce "Diani, full board" four times over, and a proposal that pads is one a
+client stops trusting on the figures too. The days stay frozen on the version either way, so a
+later itinerary view can render them all.

@@ -332,6 +332,25 @@
   .gallery div { height: 22mm; background: var(--cream); overflow: hidden; }
   .gallery img { width: 100%; height: 100%; object-fit: cover; object-position: center; }
 
+  /* ---- Day by day (Stage 4.1) ----
+     A rail of days rather than a table: a programme is read down the page one
+     day at a time, and a six-column grid makes the eye scan across it. The
+     date column is fixed so the days line up whatever the month. */
+  .days { margin-top: 16pt; border-top: 1px solid var(--hairline); }
+  .day {
+    display: grid;
+    grid-template-columns: 30mm 1fr;
+    gap: 12pt;
+    padding: 9pt 0;
+    border-bottom: 1px solid var(--hairline);
+    page-break-inside: avoid;
+  }
+  .day-when { border-right: 1px solid var(--hairline); padding-right: 10pt; }
+  .day-what .property { font-weight: 600; }
+  .day-events { margin: 4pt 0 0; padding-left: 12pt; }
+  .day-events li { margin-top: 2pt; font-size: var(--fs-note); }
+  .day-board { color: var(--ink-soft); font-size: var(--fs-note); margin-top: 3pt; }
+
   .option-body { display: grid; grid-template-columns: 1.12fr .88fr; gap: 14pt; margin-top: 14pt; }
   .spec {
     display: grid;
@@ -679,6 +698,48 @@
   <div class="page-foot"><span>{{ view.quote_number }}</span><span>Option {{ option.number }}</span></div>
 </section>
 {% endfor %}
+
+{# ================== Day by day (Stage 4.1) ================== #}
+{% if view.programme %}
+{# One page for the recommended option, not one per option: five options is
+   five near-identical pages of the same journey. Printed only where the trip
+   has a shape to describe — see ``_programme`` for the rule. #}
+<section class="page">
+  <div class="eyebrow">Day by day</div>
+  <h1>Your Itinerary</h1>
+  <p class="serif-note" style="margin-top:6pt">
+    As quoted for {{ view.programme_option }}.
+  </p>
+
+  <div class="days">
+    {% for day in view.programme %}
+    <div class="day">
+      <div class="day-when">
+        <div class="cell-label">{{ day.label }}</div>
+        <div class="cell-value">{{ day.on }}</div>
+      </div>
+      <div class="day-what">
+        <div class="property">
+          {%- if day.move %}{{ day.move }}
+          {%- else %}{{ day.place }}{% if day.property_name and day.property_name != day.place %} &middot; {{ day.property_name }}{% endif %}
+          {%- endif %}
+        </div>
+        {% if day.move %}<div class="day-board">{{ day.place }}</div>{% endif %}
+        {% if day.events %}
+        <ul class="day-events">
+          {% for event in day.events %}<li>{{ event }}</li>{% endfor %}
+        </ul>
+        {% endif %}
+        {% if day.board %}<div class="day-board">{{ day.board }}</div>{% endif %}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+
+  <div class="spacer"></div>
+  <div class="page-foot"><span>{{ view.quote_number }}</span><span>Day by day</span></div>
+</section>
+{% endif %}
 
 {# ================== Comparison + considered-and-declined ================== #}
 {% if view.comparison %}

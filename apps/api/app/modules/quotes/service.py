@@ -18,6 +18,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import AppError, NotFoundError
 from app.modules.clients.models import Client
+from app.modules.quotes.itinerary import Excursion, Movement
+from app.modules.quotes.itinerary import check as check_itinerary
 from app.modules.quotes.models import (
     Quote,
     QuoteAccommodation,
@@ -211,6 +213,7 @@ class QuoteService:
                 )
             )
         self._check_transport(quote)
+        self._check_itinerary(quote)
 
         self.db.add(quote)
         try:
@@ -310,6 +313,53 @@ class QuoteService:
         if problems:
             raise AppError(
                 "This quote's transport cannot be sold as entered: "
+                + " ".join(f"({p.code}) {p.message}" for p in problems)
+            )
+
+    @staticmethod
+    def _check_itinerary(quote: Quote) -> None:
+        """Refuse a day that is not a day of this trip (Stage 4.1).
+
+        An excursion's fare is selected by **day number** (§3.8) and a
+        movement's tariff by **travel date** (§3.10), so a day nine on a
+        four-day trip is not a presentation problem: it is a price taken from a
+        window the group is not here for. The quote then prices cleanly, and
+        the only sign of it is a page nobody cross-checks against a calendar.
+
+        Every selected activity is checked, optional ones included: an optional
+        excursion quoted beside the package is quoted off the same fare table
+        and gets the date just as wrong.
+        """
+        problems = blocking_problems(
+            check_itinerary(
+                arrival=quote.arrival_date,
+                departure=quote.departure_date,
+                movements=[
+                    Movement(
+                        sequence=segment.sequence,
+                        kind=segment.kind,
+                        mode=segment.mode,
+                        label=(
+                            segment.description
+                            or f"{segment.mode.upper()} {segment.kind}"
+                        ),
+                        on=segment.travel_date,
+                    )
+                    for segment in quote.transport_segments
+                ],
+                excursions=[
+                    # Named by id: the activity rows are not loaded here and
+                    # fetching them would be a query for a message. The id is
+                    # what an agent's tooling has anyway.
+                    Excursion(name=f"Activity {row.activity_id}", day=row.day)
+                    for leg in quote.legs
+                    for row in leg.activities
+                ],
+            )
+        )
+        if problems:
+            raise AppError(
+                "This quote's day-by-day cannot be priced as entered: "
                 + " ".join(f"({p.code}) {p.message}" for p in problems)
             )
 

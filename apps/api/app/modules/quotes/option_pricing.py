@@ -54,6 +54,7 @@ from app.modules.quotes.cohorts import (
     price_group,
 )
 from app.modules.quotes.group import build_group, residence_ids
+from app.modules.quotes.itinerary import Excursion
 from app.modules.quotes.models import (
     Quote,
     QuoteOption,
@@ -208,6 +209,12 @@ class ActivityCosting:
     entries: list[CostEntry] = field(default_factory=list)
     #: What the document lists as included, in the words a client reads.
     names: list[str] = field(default_factory=list)
+    #: The same excursions with the day the agent scheduled them on, for the
+    #: day-by-day programme (Stage 4.1). Carried from here rather than looked
+    #: up again because this is where the day is already known: it is what the
+    #: fare was selected against, so the programme checks the value pricing
+    #: used instead of a second derivation of it.
+    scheduled: list[Excursion] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
 
@@ -260,6 +267,12 @@ class LegCosting:
     accommodation_id: uuid.UUID
     accommodation_name: str
     destination_id: uuid.UUID
+    # The nights this leg holds, as dates. A costing that kept only the count
+    # could not say which day the client is where, which is the whole of the
+    # day-by-day programme (Stage 4.1) — and a count plus an implied start is
+    # the same information only until somebody edits a leg (§3.9).
+    check_in: date
+    check_out: date
     room: RoomTypeQuote
     plan: MealPlan
     plan_code: str
@@ -823,6 +836,10 @@ class OptionPricingService:
             accommodation_id=accommodation.id,
             accommodation_name=accommodation.name,
             destination_id=accommodation.destination_id,
+            # ``nights`` is one entry per night slept, so check-out is the
+            # morning after the last of them.
+            check_in=nights[0],
+            check_out=nights[-1] + timedelta(days=1),
             room=best,
             plan=plan,
             plan_code=plan_code,
@@ -1846,6 +1863,9 @@ class OptionPricingService:
         assumed: set[str] = set()
         for activity in sorted(included, key=lambda one: one.name):
             costing.names.append(activity.name)
+            costing.scheduled.append(
+                Excursion(name=activity.name, day=selected.get(activity.id))
+            )
             for cohort in group.cohorts:
                 fare = index.get((activity.id, cohort.residence))
                 if fare is None:

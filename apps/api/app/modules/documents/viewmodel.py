@@ -109,6 +109,29 @@ class ItineraryLeg:
 
 
 @dataclass(frozen=True)
+class DayView:
+    """One day of the trip, as it reads on the proposal (Stage 4.1).
+
+    Every field is already a sentence fragment: the template's job is layout,
+    and a template deciding whether to write "Breakfast, then checkout" is a
+    template holding commercial wording.
+    """
+
+    label: str
+    on: str
+    place: str
+    property_name: str
+    #: "Coral Sands → Baobab Beach Lodge" on a day the package moves hotels,
+    #: empty otherwise.
+    move: str
+    #: The movements and excursions of the day, in the order they happen.
+    events: list[str]
+    board: str
+    is_arrival: bool = False
+    is_departure: bool = False
+
+
+@dataclass(frozen=True)
 class CohortPriceView:
     """What one group of travellers pays, in their own currency (§3.8).
 
@@ -152,6 +175,9 @@ class OptionView:
     route: str = ""
     # Per-cohort prices where the group is not uniform (§3.8).
     cohorts: list[CohortPriceView] = field(default_factory=list)
+    # The day-by-day programme (Stage 4.1) — what happens on which day, which
+    # is what a client reads before they look at the price.
+    days: list[DayView] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -231,6 +257,10 @@ class QuotationView:
     # config, plus whatever this quote makes true — the flights we cannot
     # ticket, the upgrades quoted separately.
     exclusions: list[str]
+    # The day-by-day programme (Stage 4.1), for ONE option — see
+    # ``QuotationViewBuilder._programme`` for which and why.
+    programme: list[DayView]
+    programme_option: str
     valid_until: date | None
     issued_on: date
 
@@ -271,6 +301,8 @@ class QuotationViewBuilder:
                 )
             )
 
+        programme, programme_option = self._programme(options)
+
         return QuotationView(
             config=config,
             quote_number=quote.quote_number,
@@ -298,6 +330,8 @@ class QuotationViewBuilder:
             transport=transport,
             experiences=await self._experiences(quote, currency),
             exclusions=self._exclusions(config, transport),
+            programme=programme,
+            programme_option=programme_option,
             valid_until=quote.valid_until,
             issued_on=version.created_at.date(),
         )
@@ -392,6 +426,8 @@ class QuotationViewBuilder:
             # These rows exist for the group that has no single figure.
             cohorts = []
 
+        days = self._days(raw.get("days") or [])
+
         hero, gallery = await self._property_images(accommodation_id)
         blurb = await self._blurb(accommodation_id)
         comparable = bool(raw.get("is_comparable", True))
@@ -424,9 +460,105 @@ class QuotationViewBuilder:
             gallery=gallery,
             comparability_note=note,
             itinerary=itinerary,
+            days=days,
             route=route,
             cohorts=cohorts,
         )
+
+    @staticmethod
+    def _programme(options: list[OptionView]) -> tuple[list[DayView], str]:
+        """The one option whose day-by-day is printed, and its name (Stage 4.1).
+
+        **One page, not one per option.** Every option carries its own frozen
+        programme, because which day a client is in the Mara depends on the
+        package — but five options is five near-identical pages of the same
+        journey, and a proposal that repeats itself is one nobody finishes.
+        The recommended option is the one the document leads on everywhere
+        else, so it is the one whose days are printed; where nothing is
+        recommended the first option stands in.
+
+        **Printed only where there is something to say.** A four-day beach stay
+        with no movements and no excursions would produce "Diani, full board"
+        four times over, which is padding — and this document's whole argument
+        is that it does not pad. So the page appears when the trip actually has
+        a shape: a journey, an excursion, or more than one property.
+        """
+        if not options:
+            return [], ""
+        chosen = next((one for one in options if one.is_recommended), options[0])
+        days = chosen.days
+        worth_printing = any(day.events for day in days) or len(chosen.itinerary) > 1
+        if not days or not worth_printing:
+            return [], ""
+        return days, chosen.name
+
+    def _days(self, frozen: list[dict]) -> list[DayView]:
+        """The frozen programme as the proposal reads it (Stage 4.1).
+
+        Read from the snapshot and never recomputed, like every other figure on
+        this page: a leg re-dated after the quote went out must not change the
+        document the client is looking at.
+
+        The wording lives here rather than in the pure layer because it is
+        commercial language. Two choices worth naming:
+
+        * **The departure day says checkout and nothing about meals.** It has
+          no night under it, so it has no board of its own; printing the last
+          leg's basis there would promise a lunch and a dinner nobody bought,
+          and promising a breakfast instead is only right until a room-only
+          leg makes it wrong.
+        * **Nothing is invented for a quiet day.** A day with no movement and
+          no excursion says where they are and what board they are on, and
+          stops. Filling it with "day at leisure" is the sort of copy that
+          reads as padding, and a proposal that pads is one a client stops
+          trusting on the figures too.
+        """
+        out: list[DayView] = []
+        for row in frozen:
+            events = [str(one) for one in (row.get("movements") or []) if one]
+            events.extend(str(one) for one in (row.get("excursions") or []) if one)
+            board = str(row.get("board") or "")
+            phrase = (
+                "Checkout"
+                if row.get("is_departure")
+                else MEAL_PLAN_PHRASES.get(board, board)
+            )
+            place = str(row.get("destination") or "")
+            property_name = str(row.get("property_name") or "")
+            leaving = str(row.get("moves_from") or "")
+            out.append(
+                DayView(
+                    label=f"Day {int(row.get('number') or 0):02d}",
+                    on=self._day_date(str(row.get("date") or "")),
+                    place=place,
+                    property_name=property_name,
+                    move=(
+                        f"{leaving} \u2192 {property_name}"
+                        if leaving and property_name
+                        else ""
+                    ),
+                    events=events,
+                    board=phrase,
+                    is_arrival=bool(row.get("is_arrival")),
+                    is_departure=bool(row.get("is_departure")),
+                )
+            )
+        return out
+
+    @staticmethod
+    def _day_date(iso: str) -> str:
+        """"Wed 01 Jul" — the weekday matters on an itinerary.
+
+        A client checking a programme against their own diary is checking days
+        of the week as much as dates, and the year is already on the cover.
+        """
+        if not iso:
+            return ""
+        try:
+            when = date.fromisoformat(iso)
+        except ValueError:
+            return iso
+        return when.strftime("%a %d %b")
 
     @staticmethod
     def _nights_phrase(nights: Any) -> str:

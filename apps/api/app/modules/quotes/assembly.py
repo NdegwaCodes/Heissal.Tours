@@ -37,6 +37,15 @@ from app.modules.accommodations.models import Accommodation
 from app.modules.destinations.models import Destination
 from app.modules.pricing.config import PricingConfig
 from app.modules.pricing.service import PricingConfigService
+from app.modules.quotes.itinerary import (
+    Movement,
+)
+from app.modules.quotes.itinerary import (
+    build as build_programme,
+)
+from app.modules.quotes.itinerary import (
+    check as check_itinerary,
+)
 from app.modules.quotes.models import (
     Quote,
     QuoteOption,
@@ -367,6 +376,7 @@ class QuoteAssemblyService:
 
         problems.extend(self._package_problems(quote))
         problems.extend(self._transport_problems(quote, priced))
+        problems.extend(self._itinerary_problems(quote, priced))
 
         return Readiness(
             is_ready=not any(p.severity == BLOCKING for p in problems),
@@ -485,6 +495,60 @@ class QuoteAssemblyService:
                 )
             )
         return out
+
+    @staticmethod
+    def _movements(quote: Quote) -> list[Movement]:
+        """The journey as the programme sees it (Stage 4.1).
+
+        Built from the segment rows rather than from the priced charges,
+        because the date is what the programme needs and a charge carries the
+        cost. The label is the agent's own description where there is one: our
+        composed "Line haul · ROAD" is internal vocabulary and has leaked onto
+        a client document once already (§3.11).
+        """
+        return [
+            Movement(
+                sequence=segment.sequence,
+                kind=segment.kind,
+                mode=segment.mode,
+                label=segment.description or f"{segment.mode.upper()} {segment.kind}",
+                on=segment.travel_date,
+                is_optional=segment.is_optional,
+            )
+            for segment in sorted(
+                quote.transport_segments, key=lambda one: one.sequence
+            )
+        ]
+
+    def _itinerary_problems(
+        self, quote: Quote, priced: OptionPricingResult
+    ) -> list[Problem]:
+        """Grade the day-by-day against the quote's own dates (Stage 4.1).
+
+        Both blocking faults here are **mis-prices**, not presentation
+        problems: an excursion scheduled off the trip has its fare selected for
+        a date the group is not in the country (§3.8), and a movement dated
+        outside the stay prices off the wrong tariff window (§3.10). Neither is
+        visible on a finished document, which is what puts them here rather
+        than in a warning nobody reads.
+
+        Checked once for the quote, not once per option: the movements and the
+        excursions belong to the journey and are the same whichever hotel is
+        chosen.
+        """
+        return [
+            Problem(
+                BLOCKING if found.blocking else ADVISORY,
+                found.code,
+                found.message,
+            )
+            for found in check_itinerary(
+                arrival=quote.arrival_date,
+                departure=quote.departure_date,
+                movements=self._movements(quote),
+                excursions=priced.activities.scheduled,
+            )
+        ]
 
     @staticmethod
     def _count_problems(
@@ -724,6 +788,7 @@ def _snapshot(
     order = {o.id: o.sort_order for o in quote.options}
     destinations = destinations or {}
     residences = residences or {}
+    movements = QuoteAssemblyService._movements(quote)
     return {
         "quote_number": quote.quote_number,
         "currency": quote.presentation_currency.upper(),
@@ -801,6 +866,44 @@ def _snapshot(
                         ),
                     }
                     for leg in o.legs
+                ],
+                # The day-by-day programme as quoted (Stage 4.1). Frozen
+                # per option, because which day the client is where depends on
+                # the package they choose — and frozen at all for the reason
+                # the money is: a leg re-dated next week must not change what
+                # this version says the client was offered.
+                "days": [
+                    {
+                        "number": day.number,
+                        "date": day.on.isoformat(),
+                        "destination": day.destination,
+                        "property_name": day.property_name,
+                        "board": day.board,
+                        "leg": day.leg,
+                        "moves_from": day.moves_from,
+                        "movements": [one.label for one in day.movements],
+                        "excursions": list(day.excursions),
+                        "is_arrival": day.is_arrival,
+                        "is_departure": day.is_departure,
+                        "has_night": day.has_night,
+                    }
+                    for day in build_programme(
+                        [
+                            Leg(
+                                sequence=leg.sequence,
+                                destination=destinations.get(leg.destination_id, ""),
+                                check_in=leg.check_in,
+                                check_out=leg.check_out,
+                                property_name=leg.accommodation_name,
+                                board=leg.plan_code,
+                            )
+                            for leg in o.legs
+                        ],
+                        arrival=quote.arrival_date,
+                        departure=quote.departure_date,
+                        movements=movements,
+                        excursions=priced.activities.scheduled,
+                    )
                 ],
                 # What each cohort pays in its own currency (§3.8), and the
                 # rates that got there. A converted total with an unstated rate

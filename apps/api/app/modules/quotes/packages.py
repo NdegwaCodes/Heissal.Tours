@@ -57,6 +57,11 @@ class Leg:
     check_in: date
     check_out: date
     property_name: str = ""
+    #: The meal plan resolved for this leg, as its code. Carried so the
+    #: day-by-day programme (Stage 4.1) can say what board each day is on
+    #: without a second lookup — a package's plan is a per-leg decision (§3.9),
+    #: so it cannot be read off the option.
+    board: str = ""
 
     @property
     def nights(self) -> int:
