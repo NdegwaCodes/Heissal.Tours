@@ -1046,3 +1046,26 @@ the quote's own facts: the flights we cannot ticket (§3.10) and the optional up
 with their price so "not included" cannot be read as "not available". Marked with dashes rather
 than ticks — an exclusions list bulleted like an inclusions list is the one misreading this
 section cannot afford.
+
+**A per-person rounding step per currency** (Stage 3B, 2026-09-04, client-confirmed)
+One global step of 100 was right for shillings and badly wrong for dollars. Against the client's
+own rates, Pride Inn Diani's USD 135 per person became USD 200 (**+48.1%**) and Palm Garden's
+USD 144 became USD 200 (+38.9%). That is not a rounding convention to a client, it is a
+different quote, and it loses a booking without anyone learning why.
+
+`per_person_rounding_by_currency` in the pricing config, falling back to `per_person_rounding`
+for anything unlisted: **USD 1** as the client chose, EUR and GBP defaulted to 1 rather than
+waiting to be discovered the same way, KES unchanged at 100. `PricingConfig.rounding_for()` is
+a method because pricing rounds in three places — the option build-up, each cohort's own figure
+and an optional add-on — and a fallback spelled out three times is one that will eventually
+differ in one of them.
+
+`price_group` now takes `rounding_step` as a number **or a callable**, and for a mixed group it
+has to be the callable: each cohort is billed in its own currency (§3.8), so two steps apply
+inside one price. Residents round to KES 17,600 while non-residents on the same quote round to
+USD 352.
+
+**Known, and not this commit's to fix:** for a mixed group the option's whole-group
+`build_up.group_total` and the sum of the cohort totals differ by the rounding — 126,600 against
+126,720 on the two-cohort case above — because each rounds up at a different level. Both appear
+on the client document today, which is a contradiction the design exists to prevent (§3.6).

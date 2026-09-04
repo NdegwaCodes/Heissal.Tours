@@ -41,7 +41,23 @@ class PricingConfig(BaseModel):
     profit_pct: Decimal = Field(default=Decimal("24"), ge=0, le=100)
     # The per-person figure is rounded UP to this step before being multiplied
     # back out to the group total, so the document's two headline numbers agree.
+    # This is the fallback; the map below is what actually applies.
     per_person_rounding: Decimal = Field(default=Decimal("100"), gt=0)
+    # **A step per currency.** One global step cannot be right for both: KES 100
+    # is a rounding on a five-figure shilling price and a 48% mark-up on a
+    # two-figure dollar one. Rounding USD 135 per person up to USD 200 does not
+    # look like a rounding convention to a client, it looks like a different
+    # quote — and it is the kind of error that loses a booking without anyone
+    # learning why. USD 1 confirmed by the client 2026-09-04; the other foreign
+    # currencies default to 1 for the same reason rather than waiting to be
+    # discovered. Anything not listed falls back to ``per_person_rounding``.
+    per_person_rounding_by_currency: dict[str, Decimal] = Field(
+        default_factory=lambda: {
+            "USD": Decimal("1"),
+            "EUR": Decimal("1"),
+            "GBP": Decimal("1"),
+        }
+    )
     # A Stage 3 quotation is valid for 30 days, unlike the Stage 2 default.
     quotation_validity_days: int = Field(default=30, ge=1)
 
@@ -54,3 +70,16 @@ class PricingConfig(BaseModel):
     max_catered_options: int = Field(default=9, ge=1)
     min_self_catering_options: int = Field(default=1, ge=0)
     max_self_catering_options: int = Field(default=2, ge=0)
+
+    def rounding_for(self, currency: str) -> Decimal:
+        """The per-person rounding step for one currency.
+
+        A method rather than a lookup at each call site: pricing rounds in three
+        places (the option build-up, each cohort's own figure, and an optional
+        add-on), and a fallback spelled out three times is a fallback that will
+        eventually differ in one of them.
+        """
+        step = self.per_person_rounding_by_currency.get(currency.upper())
+        if step is None or step <= 0:
+            return self.per_person_rounding
+        return step

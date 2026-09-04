@@ -24,6 +24,7 @@ class PricingConfigRead(BaseModel):
     contingency_pct: Decimal
     profit_pct: Decimal
     per_person_rounding: Decimal
+    per_person_rounding_by_currency: dict[str, Decimal]
     quotation_validity_days: int
     min_catered_options: int
     max_catered_options: int
@@ -43,6 +44,9 @@ class PricingConfigUpdate(BaseModel):
     contingency_pct: Decimal | None = Field(default=None, ge=0, le=100)
     profit_pct: Decimal | None = Field(default=None, ge=0, le=100)
     per_person_rounding: Decimal | None = Field(default=None, gt=0)
+    # Replaces the whole map when sent — a per-currency step is a policy, and
+    # merging keys would leave a removed currency silently in force.
+    per_person_rounding_by_currency: dict[str, Decimal] | None = None
     quotation_validity_days: int | None = Field(default=None, ge=1)
     min_catered_options: int | None = Field(default=None, ge=1)
     max_catered_options: int | None = Field(default=None, ge=1)

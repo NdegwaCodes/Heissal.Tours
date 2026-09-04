@@ -406,7 +406,10 @@ class OptionPricingService:
                 pax=group.pax,
                 contingency_pct=contingency,
                 profit_pct=profit,
-                rounding_step=cfg.per_person_rounding,
+                # The presentation currency's own step: a dollar quote whose
+                # add-on rounds to the next hundred dollars is not quoting an
+                # upgrade, it is quoting a different upgrade (§3.6).
+                rounding_step=cfg.rounding_for(quote.presentation_currency),
                 uniform_group=group.is_uniform,
             ).group_total
 
@@ -420,7 +423,7 @@ class OptionPricingService:
                 requested_plan=requested_plan,
                 contingency_pct=contingency,
                 profit_pct=profit,
-                rounding_step=cfg.per_person_rounding,
+                rounding=cfg.rounding_for,
                 transport=transport,
                 into=result,
             )
@@ -802,7 +805,11 @@ class OptionPricingService:
         requested_plan: str,
         contingency_pct: Decimal,
         profit_pct: Decimal,
-        rounding_step: Decimal,
+        # A step *per currency*, not one number: the option's own build-up
+        # rounds in the presentation currency and each cohort rounds in its
+        # own (§3.8), and KES 100 against USD 1 is the difference between a
+        # rounding and a 48% mark-up.
+        rounding: Callable[[str], Decimal],
         transport: TransportCosting,
         into: OptionPricingResult,
     ) -> None:
@@ -884,7 +891,7 @@ class OptionPricingService:
             contingency_pct=contingency_pct,
             profit_pct=profit_pct,
             agent_cover_fee=option.agent_cover_fee,
-            rounding_step=rounding_step,
+            rounding_step=rounding(quote.presentation_currency),
             # A per-person figure is only meaningful when everyone pays the same.
             # The vector is what finally makes residency part of that judgement:
             # before it, only traveller type could vary, so a mixed-residency
@@ -905,7 +912,7 @@ class OptionPricingService:
             contingency_pct=contingency_pct,
             profit_pct=profit_pct,
             agent_cover_fee=option.agent_cover_fee,
-            rounding_step=rounding_step,
+            rounding=rounding,
         )
         into.options.append(
             OptionCosting(
@@ -1190,7 +1197,7 @@ class OptionPricingService:
         contingency_pct: Decimal,
         profit_pct: Decimal,
         agent_cover_fee: Decimal,
-        rounding_step: Decimal,
+        rounding: Callable[[str], Decimal],
     ) -> GroupPrice | None:
         """What each cohort pays, in its own billing currency (§3.8).
 
@@ -1268,7 +1275,9 @@ class OptionPricingService:
             contingency_pct=contingency_pct,
             profit_pct=profit_pct,
             agent_cover_fee=agent_cover_fee,
-            rounding_step=rounding_step,
+            # Handed the function rather than a number, so each cohort rounds
+            # in the currency it is actually billed in.
+            rounding_step=rounding,
             group_currency=presentation,
             convert=convert,
             rate_used=rate_used,

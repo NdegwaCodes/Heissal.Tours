@@ -507,7 +507,7 @@ def price_group(
     contingency_pct: Decimal,
     profit_pct: Decimal,
     agent_cover_fee: Decimal = Decimal(0),
-    rounding_step: Decimal = Decimal("100"),
+    rounding_step: Decimal | Callable[[str], Decimal] = Decimal("100"),
     group_currency: str,
     convert: Callable[[Decimal, str, str], Decimal] | None = None,
     rate_used: Callable[[str, str], Decimal] | None = None,
@@ -518,6 +518,11 @@ def price_group(
     any other shared cost — and, as in §3.6, it is added *after* profit so it
     reaches the client at face value.
 
+    ``rounding_step`` may be a callable, and for a mixed group it has to be:
+    each cohort is billed in its own currency (§3.8), and one step cannot be
+    right for both. Rounding a dollar figure up to the next hundred is a 48%
+    mark-up, not a rounding convention.
+
     ``convert`` turns a cohort total into ``group_currency``. It is injected
     rather than imported so this module stays pure and the exchange rate a
     quotation was priced at can be pinned to the quote rather than read live at
@@ -526,6 +531,11 @@ def price_group(
     """
     components = attribute(lines, group, capacity=capacity, convert=convert)
     fee_shares = _split_per_head(agent_cover_fee, group.cohorts) if agent_cover_fee else {}
+
+    def step_for(currency: str) -> Decimal:
+        return (
+            rounding_step(currency) if callable(rounding_step) else rounding_step
+        )
 
     priced: list[CohortPrice] = []
     for cohort in group.cohorts:
@@ -538,7 +548,7 @@ def price_group(
                     contingency_pct=contingency_pct,
                     profit_pct=profit_pct,
                     agent_cover_fee=fee_shares.get(cohort.key, Decimal(0)),
-                    rounding_step=rounding_step,
+                    rounding_step=step_for(cohort.currency),
                     uniform_group=True,
                 ),
             )
