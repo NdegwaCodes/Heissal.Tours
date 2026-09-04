@@ -1270,3 +1270,40 @@ never uses, which is the whole point of it. The first version looked up only the
 sequenced, so every alternative ordering read as a road with no row on file and nothing was ever
 suggested. Every pair among a package's destinations is now resolved once and cached across
 options.
+
+**Generated copy passes the same gate money does** (Stage 4.4, 2026-09-04)
+The roadmap's last Stage 4 item is an "AI-generated narrative", and the client has not specified
+what it is for, so it was built on the reading that carries least risk and most value: the
+paragraph under a property on the option page, reviewed before it can reach anybody.
+
+The rule is the one `rate_extraction` already applies to money — *nothing this produces is ever
+written straight to the thing a client sees* — and the reason is the same. A wrong figure on a
+proposal is a commercial incident; a confidently wrong sentence about a hotel is a smaller version
+of it, and harder to spot because it reads well. So a provider produces a **draft**, an agent may
+edit it, and approval is a separate act with its own permission (`narrative:approve`). A role that
+may write copy can exist without being able to publish it, or the gate is decoration.
+
+**The brief carries facts, never adjectives.** Name, category, destination, room types, and the
+board bases the property has *rates* on — that last one because a description promising half board
+we cannot sell costs a booking the moment a client asks for it. The single free-text input is the
+agent's steer, since an agent who has visited the property knows the thing worth saying. A
+provider handed free text writes about whatever it is handed.
+
+**A draft says where it came from**: provider, model, and the brief it was given, stored beside the
+text — §3.12's source strings applied to words. An agent's own writing takes the same path with
+the provider `hand`, and a model draft a person edits becomes `stub+hand`. Not vanity: the
+provenance decides who can be asked what a sentence meant, and after an edit the answer is the
+editor.
+
+**No provider ships, and that is the honest state.** No model is configured for this project, and
+an HTTP client for a vendor nobody has chosen would be worse than a seam. The default refuses out
+loud and names the alternative. A template stitching the brief into a sentence was considered and
+rejected: "Coral Sands Resort is a resort in Diani offering full board" is the facts panel above
+it, retyped, and it would go out on client documents looking like something nobody wrote. Better
+nothing than filler — the option page reads fine without a paragraph.
+
+**Approved copy is frozen into the version.** Caught while writing the tests: making replacement a
+routine act means resolving the paragraph at render time would have an old proposal quietly
+re-describing its hotels. The text now freezes at issue, exactly as the money and the days do, and
+the live lookup remains only for versions issued before §4.4. Superseded rows are kept, which is
+what lets the table answer why last year's description differed.

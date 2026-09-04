@@ -34,8 +34,10 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import AppError, NotFoundError
+from app.integrations.narrative import ACCOMMODATION
 from app.modules.accommodations.models import Accommodation
 from app.modules.destinations.models import Destination
+from app.modules.narratives.service import NarrativeService
 from app.modules.pricing.config import PricingConfig
 from app.modules.pricing.service import PricingConfigService
 from app.modules.quotes.itinerary import (
@@ -468,6 +470,37 @@ class QuoteAssemblyService:
         )
         return {row.id: row.name for row in rows}
 
+    async def _blurbs(self, priced: OptionPricingResult) -> dict[uuid.UUID, str]:
+        """The paragraph each property is described by, resolved once (§4.4).
+
+        Frozen into the version for the same reason every figure is: an issued
+        proposal said what it said. Approving a replacement description
+        supersedes the old row but must not rewrite a document already in a
+        client's inbox — and since §4.4 makes replacement a routine act rather
+        than a rare edit, resolving this at render time would mean an old
+        version quietly re-describing its hotels.
+
+        Approved copy wins, then the hand-written column, then the catalogue's
+        own description, then nothing. A draft is never reachable: this asks
+        the service the one question the document layer is allowed to ask.
+        """
+        wanted = {option.accommodation_id for option in priced.options}
+        wanted |= {leg.accommodation_id for option in priced.options for leg in option.legs}
+        if not wanted:
+            return {}
+        narratives = NarrativeService(self.db)
+        out: dict[uuid.UUID, str] = {}
+        for accommodation_id in wanted:
+            approved = await narratives.printable(ACCOMMODATION, accommodation_id)
+            if approved is not None:
+                out[accommodation_id] = approved.text
+                continue
+            row = await self.db.get(Accommodation, accommodation_id)
+            text = (row.blurb or row.description) if row is not None else None
+            if text:
+                out[accommodation_id] = text
+        return out
+
     async def _residence_labels(self) -> dict[str, str]:
         """``{key: name}`` for the residence categories, for the frozen cohorts."""
         rows = (await self.db.execute(select(ResidenceCategory))).scalars().all()
@@ -791,6 +824,7 @@ class QuoteAssemblyService:
                 destinations=await self._destination_names(priced),
                 residences=await self._residence_labels(),
                 driving=sequenced,
+                blurbs=await self._blurbs(priced),
             ),
             currency=headline.currency,
             created_by=actor_id,
@@ -954,6 +988,7 @@ def _snapshot(
     destinations: dict[uuid.UUID, str] | None = None,
     residences: dict[str, str] | None = None,
     driving: dict[uuid.UUID, Sequenced] | None = None,
+    blurbs: dict[uuid.UUID, str] | None = None,
 ) -> dict:
     """The whole computed quote as JSON, for reconstructing it years later.
 
@@ -971,6 +1006,7 @@ def _snapshot(
     # say how long a day on the road is (§4.2).
     movements = QuoteAssemblyService._movements(quote, priced.transport.roads)
     driving = driving or {}
+    blurbs = blurbs or {}
     return {
         "quote_number": quote.quote_number,
         "currency": quote.presentation_currency.upper(),
@@ -1049,6 +1085,10 @@ def _snapshot(
                     }
                     for leg in o.legs
                 ],
+                # The description as approved when this went out (§4.4).
+                # Frozen because approving a replacement must not rewrite a
+                # proposal already in a client's inbox.
+                "blurb": blurbs.get(o.accommodation_id),
                 # What this package costs in road (§4.3). Frozen with the
                 # figures for the same reason: a route re-measured next month
                 # must not change what this version says the trip was. Absent

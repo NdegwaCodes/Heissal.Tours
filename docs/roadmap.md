@@ -265,7 +265,7 @@ sources normalised ×1.16) so the engine adds no tax on top; margin, contingency
 supplier/STO rates are **backend only**; per-person is rounded up to the nearest 100 and
 the group total derived from it so the two always reconcile.
 
-## Stage 4 — Itinerary Engine  ◑
+## Stage 4 — Itinerary Engine  ◑ (4.1–4.4 done; distance work needs no further client data)
 - ☑ 4.1 **The day-by-day programme** (`app/modules/quotes/itinerary.py`, 34 tests) — the legs,
   the journey and the excursions laid on a calendar, frozen per option into the version and
   rendered as the proposal's itinerary page. Pure derivation: every input already existed, and
@@ -308,7 +308,22 @@ the group total derived from it so the two always reconcile.
     itinerary we know least about
   - The score — total km, total hours, longest single drive, unknown hops — is frozen per option
     and printed on the worksheet's option header beside the route
-- ☐ AI-generated narrative
+- ☑ 4.4 **Proposal copy and its review gate** (`app/modules/narratives/`,
+  `app/integrations/narrative.py`, migration `8b87b4cdb902`, 18 tests) — the roadmap's
+  "AI-generated narrative", built as the half that does not depend on which model: a brief of
+  facts, a draft carrying its own provenance, and one rule — **nothing reaches a client document
+  until a person approves it**, with `narrative:approve` as its own permission
+  - The brief is **facts from the catalogue**, including only the board bases the property has
+    rates on; the agent's steer is the one free-text input
+  - An agent's own writing takes the identical path (`provider: hand`), and a model draft a
+    person edits records both — the provenance decides who can be asked what a sentence meant
+  - **No provider ships.** Nothing is configured, the default refuses out loud and names the
+    alternative, and a template that stitched the brief into a sentence was rejected: filler
+    under a photograph is worse than white space
+  - Approved copy is **frozen into the version** at issue, like the money and the days: approving
+    a replacement must not rewrite a proposal already in a client's inbox
+  - ☐ **Still with the client:** whether generated copy should go in front of clients at all, and
+    which provider. Nothing generated can reach a document until both are answered
 
 ## Stage 5 — CRM  ☐
 - Leads · Pipeline · Follow-ups · Communications · Quote tracking · Conversion analytics

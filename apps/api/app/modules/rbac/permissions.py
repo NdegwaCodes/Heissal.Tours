@@ -56,6 +56,12 @@ PERMISSIONS: dict[str, str] = {
     "supplier_doc:confirm": "Confirm extracted rows into stored rates",
     "media:read": "View property and destination imagery",
     "media:manage": "Upload and remove property and destination imagery",
+    "narrative:read": "View proposal copy and its review history",
+    "narrative:manage": "Write or generate proposal copy (drafts only)",
+    # Its own permission because it is the outward-facing act: approval is what
+    # lets a sentence reach a client. Writing copy and publishing it are
+    # different levels of trust, exactly as with issuing a quotation.
+    "narrative:approve": "Approve proposal copy for use on client documents",
     "pricing:read": "View pricing configuration (markup/discount/tax defaults)",
     "pricing:manage": "Manage pricing configuration (markup/discount/tax defaults)",
     # --- Stage 2.7: clients + quote domain ---
@@ -87,6 +93,7 @@ _REFERENCE_READ = [
     "transport_tariff:read",
     "pricing:read",
     "media:read",
+    "narrative:read",
 ]
 
 # --- System roles and their initial permissions ---

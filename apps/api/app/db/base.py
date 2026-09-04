@@ -27,6 +27,7 @@ from app.modules.clients.models import Client  # noqa: F401
 from app.modules.currency.models import Currency, ExchangeRate  # noqa: F401
 from app.modules.destinations.models import Destination  # noqa: F401
 from app.modules.media.models import DestinationImage, PropertyImage  # noqa: F401
+from app.modules.narratives.models import Narrative  # noqa: F401
 from app.modules.park_fees.models import ParkFee  # noqa: F401
 from app.modules.quotes.models import (  # noqa: F401
     Quote,
@@ -74,6 +75,7 @@ __all__ = [
     "AccommodationSupplement",
     "MealPlan",
     "RoomType",
+    "Narrative",
     "ParkFee",
     "AuditLog",
     "RefreshToken",

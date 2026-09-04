@@ -42,6 +42,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.storage import read_bytes
+from app.integrations.narrative import ACCOMMODATION
 from app.modules.accommodations.models import Accommodation
 from app.modules.activities.models import Activity, ActivityPriceTier
 from app.modules.activities.service import ActivityRateService
@@ -49,6 +50,7 @@ from app.modules.clients.models import Client
 from app.modules.destinations.models import Destination
 from app.modules.documents.config import DocumentConfig
 from app.modules.media.models import DestinationImage, PropertyImage
+from app.modules.narratives.service import NarrativeService
 from app.modules.quotes.models import Quote, QuoteVersion
 
 # How a meal-plan code reads on a document. Presentation of a stored code, not a
@@ -429,7 +431,9 @@ class QuotationViewBuilder:
         days = self._days(raw.get("days") or [])
 
         hero, gallery = await self._property_images(accommodation_id)
-        blurb = await self._blurb(accommodation_id)
+        # Frozen with the version since §4.4; the live lookup is the fallback
+        # for versions issued before it.
+        blurb = raw.get("blurb") or await self._blurb(accommodation_id)
         comparable = bool(raw.get("is_comparable", True))
         note = None
         if not comparable:
@@ -998,11 +1002,33 @@ class QuotationViewBuilder:
         return Image(url=f"data:{row.content_type};base64,{payload}", alt=alt)
 
     async def _blurb(self, accommodation_id: str | None) -> str | None:
+        """The paragraph under a property's photograph, resolved live.
+
+        The fallback path. Since §4.4 the text is frozen into the version at
+        issue — approving a replacement description must not rewrite a proposal
+        already in a client's inbox — and this answers for the versions issued
+        before that, which have no ``blurb`` in their snapshot.
+
+        Precedence, and the first entry is §4.4: **approved** copy wins. It is
+        the newest editorial decision about this property and somebody other
+        than its author signed it off, which is more than the older columns can
+        say. A draft is never reachable from here — the document layer asks
+        only "is there approved copy", and that is the whole approval gate.
+
+        Then the hand-written ``blurb``, then the catalogue ``description``,
+        then nothing. Nothing is a perfectly good outcome: the option page
+        reads fine without a paragraph, and filler under a photograph is worse
+        than white space.
+        """
         if not accommodation_id:
             return None
-        accommodation = await self.db.get(
-            Accommodation, uuid.UUID(accommodation_id)
+        subject_id = uuid.UUID(accommodation_id)
+        approved = await NarrativeService(self.db).printable(
+            ACCOMMODATION, subject_id
         )
+        if approved is not None:
+            return approved.text
+        accommodation = await self.db.get(Accommodation, subject_id)
         if accommodation is None:
             return None
         return accommodation.blurb or accommodation.description
