@@ -1357,3 +1357,56 @@ happen.
 `selected_option_id` has been on `quotes` since Stage 3.4 waiting for exactly this, and if the
 number is low then the *Recommended* flag is not describing what clients want — which nothing else
 in the system would ever have said.
+
+**The sales stages are rows, not code** (Stage 5.2, 2026-09-04)
+Heissal has not told us their pipeline stages, and a `CHECK` constraint listing mine would need a
+migration the first time somebody wants "site inspection" between quoted and negotiating. So
+`lead_stages` is reference data: ordered, renameable, with flags saying which stage means won and
+which mean lost. A generic set (new → qualified → quoted → negotiating → won/lost) is seeded on
+first use and is theirs to change.
+
+Renaming is safe **by construction**: every report asks "which stage means won" rather than
+comparing against a string it was compiled with, so "Won" can become "Booked and deposit paid"
+without a figure moving. The `key` stays for seeding and tests; the `name` is what an agent sees.
+Changing what a stage *means* (its won/lost flags) is deliberately not an edit — that changes
+history already counted.
+
+**A pipeline is history, not a status column.** `lead_stage_events` records every move, including
+the arrival, and the arrival matters: without it the time spent in the entry stage is invisible.
+"Eleven leads at quoted" is a number; "eleven at quoted, median nineteen days, four past a month"
+is a morning's work. Backwards moves and reopening a closed lead are **allowed** — a deal cools, a
+client comes back a year later — because a pipeline that only goes forwards is one where agents
+park leads at a stage they have actually left, and then the counts describe nothing. The two
+refusals are the ones that would corrupt a report: moving a lead to the stage it is already at
+(a stage change that did not happen), and closing one as lost with no reason.
+
+**A lead is never created without a next action.** Defaulted a few days out rather than demanded:
+demanding one makes the form an obstacle while the phone is ringing, and leaving it empty is how a
+lead dies. It is the single behaviour that decides whether a CRM survives a busy week — a lead
+with nothing scheduled appears on no list, annoys nobody, and disappears — so the attention list
+reports it **first**, ahead of anything merely overdue.
+
+**Nothing is closed on a timer.** Staleness is reported against a threshold the caller sets, and
+the message refuses to conclude: a honeymoon enquiry for next August is not cold at three weeks.
+A system that closed leads on a clock would be deciding sales policy.
+
+**A lead may precede a client**, so `client_id` is nullable and the contact fields sit on the
+lead. An enquiry arrives as a name and a phone number; typing a client record for every call that
+goes nowhere is how a CRM gets bypassed. What they want is loose text and loose dates for the same
+reason — "somewhere on the coast in August, maybe six of us" is the enquiry as it actually arrives.
+
+**`quotes.lead_id` is the join §5.1 was missing.** It makes a **source answerable for bookings**
+rather than for activity: won over *all* leads from that source, not over the quoted ones,
+because a channel producing twenty enquiries and two quotes is not a 100% channel just because
+both quotes converted. Stated budgets are summed per currency and only while a lead is open —
+adding a won lead's guess to the pipeline would count the same money twice, once as a guess here
+and once as a price in §5.1's funnel.
+
+**Sources are free text, normalised.** Trimmed, lower-cased, spaces and hyphens folded, so
+"Walk in", "walk-in" and "walk_in" are one row in a report. Not an enum: sources multiply with
+every campaign, and a lead refused because "instagram" is not on a list is a lead somebody files
+under "other" — after which the report is worthless anyway.
+
+**`lead:configure_pipeline` is separate from `lead:manage`.** An agent moves leads through the
+pipeline; a manager decides what the pipeline is. Reordering the stages changes what every report
+means.

@@ -67,6 +67,12 @@ PERMISSIONS: dict[str, str] = {
     # --- Stage 2.7: clients + quote domain ---
     "client:read": "View clients",
     "client:manage": "Create and edit clients",
+    "lead:read": "View leads, the pipeline and the follow-up list",
+    "lead:manage": "Create, edit and move leads",
+    # Separate from managing leads: the stages ARE the sales process, and
+    # reordering them changes what every pipeline report means. An agent moves
+    # leads through the pipeline; a manager decides what the pipeline is.
+    "lead:configure_pipeline": "Rename and reorder the pipeline's stages",
     "quote:create": "Create and assemble quotes",
     "quote:read": "View quotes (client-facing figures)",
     "quote:read_cost": "View internal cost and margin on quotes",
@@ -123,6 +129,14 @@ ROLE_DEFINITIONS: dict[str, RoleDefinition] = {
             "quote:create",
             "quote:read",
             "quote:issue",
+            # A sales agent owns leads and records what the client said — but
+            # not what the pipeline IS (§5.2), and not proposal copy going out
+            # under the brand's name (§4.4).
+            "lead:read",
+            "lead:manage",
+            "quote:record_outcome",
+            "narrative:read",
+            "narrative:manage",
         ],
     },
     "operations": {

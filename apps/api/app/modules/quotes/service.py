@@ -105,6 +105,9 @@ class QuoteService:
         quote = Quote(
             quote_number=number,
             client_id=client.id,
+            # Where the enquiry came from (§5.2), so a source can be held
+            # answerable for bookings rather than for activity.
+            lead_id=payload.lead_id,
             status="draft",
             presentation_currency=currency,
             residence_category_id=residence.id,

@@ -12,6 +12,7 @@ from app.modules.clients.router import router as clients_router
 from app.modules.currency.router import router as currency_router
 from app.modules.destinations.router import router as destinations_router
 from app.modules.documents.router import router as documents_router
+from app.modules.leads.router import router as leads_router
 from app.modules.media.router import router as media_router
 from app.modules.narratives.router import router as narratives_router
 from app.modules.park_fees.router import router as park_fees_router
@@ -48,5 +49,6 @@ api_router.include_router(media_router)
 api_router.include_router(narratives_router)
 # Stage 2 — quote domain
 api_router.include_router(clients_router)
+api_router.include_router(leads_router)
 api_router.include_router(quotes_router)
 api_router.include_router(documents_router)

@@ -131,6 +131,16 @@ class Quote(UUIDPKMixin, TimestampMixin, Base):
         DateTime(timezone=True), nullable=True
     )
 
+    # -- Stage 5.2: where it came from -------------------------------------- #
+    # The enquiry this quote was raised for. Nullable: a repeat client rings up
+    # and asks for a quote, and refusing to price one without a lead record
+    # would make the CRM an obstacle rather than a record. What it buys is the
+    # question §5.1's funnel cannot otherwise answer — which SOURCES convert,
+    # not just how many quotes do.
+    lead_id: Mapped[uuid.UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("leads.id", ondelete="SET NULL"), nullable=True
+    )
+
     # -- Stage 5.1: what happened to it ------------------------------------- #
     # ``status`` has listed accepted and declined since Stage 2 and nothing
     # could set them, so no quote in the system had ever been won or lost.

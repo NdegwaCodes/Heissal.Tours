@@ -26,6 +26,11 @@ from app.modules.auth.models import RefreshToken  # noqa: F401
 from app.modules.clients.models import Client  # noqa: F401
 from app.modules.currency.models import Currency, ExchangeRate  # noqa: F401
 from app.modules.destinations.models import Destination  # noqa: F401
+from app.modules.leads.models import (  # noqa: F401
+    Lead,
+    LeadStage,
+    LeadStageEvent,
+)
 from app.modules.media.models import DestinationImage, PropertyImage  # noqa: F401
 from app.modules.narratives.models import Narrative  # noqa: F401
 from app.modules.park_fees.models import ParkFee  # noqa: F401
@@ -75,6 +80,9 @@ __all__ = [
     "AccommodationSupplement",
     "MealPlan",
     "RoomType",
+    "Lead",
+    "LeadStage",
+    "LeadStageEvent",
     "Narrative",
     "ParkFee",
     "AuditLog",

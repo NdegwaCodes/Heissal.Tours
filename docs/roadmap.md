@@ -340,7 +340,22 @@ the group total derived from it so the two always reconcile.
     `null` rather than zero where nothing has been decided — see the decision log
   - It answers the question `selected_option_id` has been waiting for since §3.4: **do clients
     take the option we recommend?**
-- ☐ Leads · pipeline · follow-ups · communications
+- ☑ 5.2 **Leads, the pipeline and the morning list** (`app/modules/leads/`, migration
+  `6098a8bc6428`, 48 tests) — the enquiry before anybody prices anything, who owns it, what stage
+  it is at, and what the next step is
+  - **The stages are rows, not code** (the client has not named theirs): ordered, renameable,
+    with flags saying which means won and which mean lost. Renaming cannot break a report,
+    because every report asks which stage *means* won
+  - **Every move is recorded**, arrival included — "eleven at quoted, median nineteen days" is a
+    morning's work and only the history can say it. Backwards moves and reopening are allowed;
+    moving a lead where it already is, and losing one without a reason, are not
+  - **No lead is created without a next action**, defaulted a few days out. The attention list
+    puts leads with *no* next action first: they appear nowhere else and die quietly
+  - Nothing is closed on a timer — staleness is reported against the caller's threshold and the
+    message refuses to conclude
+  - `quotes.lead_id` closes §5.1's missing join: a **source is answerable for bookings**, counted
+    over all its enquiries rather than over the ones that reached a quote
+- ☐ Communications (logging calls and emails against a lead)
 
 ## Stage 6 — Public Website  ☐
 - Packages · Destinations · Accommodation · Activities · SEO · Lead capture · Custom safari builder

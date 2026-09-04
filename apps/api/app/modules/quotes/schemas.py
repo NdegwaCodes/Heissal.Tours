@@ -209,6 +209,11 @@ class QuoteOptionIn(BaseModel):
 
 class QuoteCreate(BaseModel):
     client_id: uuid.UUID
+    # The enquiry this quote answers (§5.2). Optional: a repeat client rings up
+    # and asks for a quote, and refusing to price one without a lead record
+    # would make the CRM an obstacle. Given, it is what lets §5.1's funnel say
+    # which SOURCES convert rather than only how many quotes do.
+    lead_id: uuid.UUID | None = None
     # Optional — default from the client's residence category / its currency.
     presentation_currency: str | None = Field(default=None, min_length=3, max_length=3)
     residence_category_id: uuid.UUID | None = None
@@ -358,6 +363,7 @@ class QuoteRead(BaseModel):
     profit_pct: Decimal | None
     contingency_pct: Decimal | None
     requested_meal_plan_id: uuid.UUID | None
+    lead_id: uuid.UUID | None = None
     valid_until: date | None
     # The status as it reads today (§5.1): a sent quote past its validity is
     # expired without anything having written that to the row. Exposed beside
