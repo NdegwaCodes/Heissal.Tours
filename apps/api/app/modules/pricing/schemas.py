@@ -30,6 +30,10 @@ class PricingConfigRead(BaseModel):
     max_catered_options: int
     min_self_catering_options: int
     max_self_catering_options: int
+    # How much driving this operation will sell in a day (§4.3). Exposed for
+    # the reason every other threshold here is: configurable in name only is
+    # not configurable.
+    max_drive_minutes_per_day: int
 
 
 class PricingConfigUpdate(BaseModel):
@@ -52,6 +56,7 @@ class PricingConfigUpdate(BaseModel):
     max_catered_options: int | None = Field(default=None, ge=1)
     min_self_catering_options: int | None = Field(default=None, ge=0)
     max_self_catering_options: int | None = Field(default=None, ge=0)
+    max_drive_minutes_per_day: int | None = Field(default=None, ge=60)
 
 
 class ConversionRead(BaseModel):

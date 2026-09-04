@@ -47,6 +47,37 @@ COMPONENT_ORDER = (
     "transport_optional",
 )
 
+def driving_phrase(frozen: object) -> str:
+    """A package's driving as one line, or nothing where it was not graded.
+
+    The longest drive is named beside the total because that is the figure an
+    operator argues with a client about, and the unknown hops are named because
+    without them the total is a floor rather than a total.
+    """
+    if not isinstance(frozen, dict):
+        return ""
+    try:
+        km = Decimal(str(frozen.get("total_km") or 0))
+        minutes = int(frozen.get("total_minutes") or 0)
+        longest = int(frozen.get("longest_minutes") or 0)
+        unknown = int(frozen.get("unknown_hops") or 0)
+    except (TypeError, ValueError):
+        return ""
+    if not km and not minutes and not unknown:
+        return ""
+    parts = [f"{km:,.0f} km", f"{minutes / 60:.0f} h driving"]
+    if longest:
+        parts.append(f"longest {longest / 60:.1f} h")
+    if unknown:
+        # Said out loud: the figures above are short by this many drives, and
+        # an operator reading a total that is missing one is worse off than one
+        # reading no total at all.
+        parts.append(
+            f"{unknown} drive(s) with no route on file — the totals are a floor"
+        )
+    return " · ".join(parts)
+
+
 COMPONENT_LABELS = {
     "accommodation": "Accommodation",
     "supplements": "Mandatory supplements",
@@ -117,6 +148,11 @@ class WorksheetOption:
     meal_plan_fallback_from: str | None
     rooms_required: int | None
     nights: int | None
+    #: "1,510 km · 26 h driving · longest 15 h" (§4.3), or empty where the
+    #: package has no order to grade. On the option's own header line rather
+    #: than in a block of its own, beside the route it belongs to: an operator
+    #: comparing two packages is comparing exactly these two facts.
+    driving: str
     groups: list[WorksheetGroup]
     build_up: list[WorksheetFigure]
     margin: list[WorksheetFigure]
@@ -340,6 +376,7 @@ class WorksheetBuilder:
         ]
 
         return WorksheetOption(
+            driving=self._driving_phrase(raw.get("driving")),
             number=f"{index:02d}",
             name=str(raw.get("accommodation_name") or ""),
             route=" → ".join(
@@ -391,6 +428,10 @@ class WorksheetBuilder:
             (Decimal(str(one.get("extended") or "0")) for one in lines), Decimal(0)
         )
         return money(total, currencies.pop())
+
+    @staticmethod
+    def _driving_phrase(frozen: object) -> str:
+        return driving_phrase(frozen)
 
     @staticmethod
     def _any(lines: list, component: str) -> bool:

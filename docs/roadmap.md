@@ -294,7 +294,21 @@ the group total derived from it so the two always reconcile.
   - Drive time reaches the day-by-day as "about 5 h 30" — hedged, because it is a Kenyan road
   - The **transfer and line-haul tariff tables got an API** at last: readiness has said "load the
     fare" since §3.10 with no endpoint to load it through
-- ☐ Route sequencing · itinerary scoring · AI-generated narrative
+- ☑ 4.3 **Route sequencing and itinerary scoring** (`app/modules/quotes/sequencing.py`,
+  31 tests) — contiguity says every night has a bed and nothing about the roads between them.
+  This reads the map: a drive past the working day (configurable, `max_drive_minutes_per_day`),
+  one night at the end of a long drive, a hop with no route on file, and a **shorter ordering of
+  the same places** with the kilometres it saves
+  - **All advisory, deliberately.** Each is a sellable trip somebody should look at twice, and
+    the agent may know the long day is what the client asked for. Blocking here would argue with
+    the person who spoke to them — see the decision log
+  - Nothing is reordered: packages stay curated (§3.9), the note says why an order may be
+    deliberate, and the ends stay fixed because that is where the client lands and flies home
+  - No ordering is recommended where a road is missing: otherwise the shortest is always the
+    itinerary we know least about
+  - The score — total km, total hours, longest single drive, unknown hops — is frozen per option
+    and printed on the worksheet's option header beside the route
+- ☐ AI-generated narrative
 
 ## Stage 5 — CRM  ☐
 - Leads · Pipeline · Follow-ups · Communications · Quote tracking · Conversion analytics

@@ -69,10 +69,13 @@ from app.modules.quotes.schemas import (
     QuoteOptionUpdate,
     RejectedCandidateIn,
 )
+from app.modules.quotes.sequencing import Sequenced
+from app.modules.quotes.sequencing import sequence as check_sequence
 from app.modules.quotes.service import QuoteService
 from app.modules.quotes.transport import check as check_transport
 from app.modules.quotes.transport import segments_of
 from app.modules.residence.models import ResidenceCategory
+from app.modules.transport.service import RouteService
 
 BLOCKING = "blocking"
 ADVISORY = "advisory"
@@ -298,10 +301,25 @@ class QuoteAssemblyService:
                 self_catering_options=0,
                 problems=[Problem(BLOCKING, "not_priceable", str(exc))],
             )
-        return self._grade(quote, priced, cfg)
+        sequenced = await self._sequenced(quote, cfg)
+        return self._grade(
+            quote,
+            priced,
+            cfg,
+            sequencing=self._sequence_problems(quote, sequenced),
+        )
 
     def _grade(
-        self, quote: Quote, priced: OptionPricingResult, cfg: PricingConfig
+        self,
+        quote: Quote,
+        priced: OptionPricingResult,
+        cfg: PricingConfig,
+        *,
+        # Passed in rather than computed here because sequencing needs the
+        # route table and this method is deliberately synchronous: it is the
+        # one place that decides whether a quote can be issued, and keeping it
+        # free of I/O keeps that decision testable without a database.
+        sequencing: list[Problem] | None = None,
     ) -> Readiness:
         problems: list[Problem] = []
 
@@ -379,6 +397,7 @@ class QuoteAssemblyService:
         problems.extend(self._package_problems(quote))
         problems.extend(self._transport_problems(quote, priced))
         problems.extend(self._itinerary_problems(quote, priced))
+        problems.extend(sequencing or [])
 
         return Readiness(
             is_ready=not any(p.severity == BLOCKING for p in problems),
@@ -510,6 +529,114 @@ class QuoteAssemblyService:
             )
         return out
 
+    async def _sequenced(
+        self, quote: Quote, cfg: PricingConfig
+    ) -> dict[uuid.UUID, Sequenced]:
+        """Grade each package's order against the road network (§4.3).
+
+        Contiguity (§3.9) says every night has a bed; it says nothing about the
+        roads between the beds. This is the pass that reads the map: an
+        eleven-hour drive on a day the document calls a transfer, a one-night
+        stay at the end of one, a shorter ordering of the same places.
+
+        All advisory. Every one of them is a trip that can be sold and a trip
+        somebody should look at twice — and the agent may know the long day is
+        what the client asked for. The blocking rules in this area are about
+        money or deliverability and live elsewhere (§3.10, §4.2).
+
+        One route lookup per hop, cached across options: two packages visiting
+        the same places in the same order ask the same question, and a quote
+        with five options would otherwise ask it five times.
+        """
+        routes = RouteService(self.db)
+        names = await self._destination_place_names(quote)
+        cache: dict[tuple[uuid.UUID, uuid.UUID], Road | None] = {}
+        out: dict[uuid.UUID, Sequenced] = {}
+
+        for option in sorted(quote.options, key=lambda o: o.sort_order):
+            legs = sorted(option.legs, key=lambda leg: leg.sequence)
+            if len(legs) < 2:
+                # A single-property option has no order to get wrong.
+                continue
+            ids = [leg.destination_id for leg in legs]
+            by_name = {names.get(one, str(one)): one for one in ids}
+
+            def road_for(
+                here: str, there: str, *, _by_name: dict[str, uuid.UUID] = by_name
+            ) -> Road | None:
+                pair = (_by_name[here], _by_name[there])
+                return cache.get(pair)
+
+            # EVERY pair, not only the consecutive ones. The shorter-order
+            # search asks about roads the given itinerary does not use — that
+            # is the whole point of it — and a cache holding only the drives
+            # already sequenced would answer "no road" to all of them and
+            # never find anything.
+            for first in ids:
+                for second in ids:
+                    if first == second or (first, second) in cache:
+                        continue
+                    # Looked up on the date the drive would happen, because a
+                    # route is effective-dated: the same road is a saloon drive
+                    # in January and a 4x4 drive in April (§4.2). For a pair
+                    # the itinerary does not visit consecutively there is no
+                    # such date, so the arrival stands.
+                    on = next(
+                        (
+                            leg.check_in
+                            for leg in legs
+                            if leg.destination_id == second
+                        ),
+                        quote.arrival_date,
+                    )
+                    cache[(first, second)] = await routes.find(
+                        origin_id=first, destination_id=second, on=on
+                    )
+
+            out[option.id] = check_sequence(
+                [names.get(one, str(one)) for one in ids],
+                road_for=road_for,
+                nights=[
+                    (leg.check_out - leg.check_in).days for leg in legs
+                ],
+                max_drive_minutes=cfg.max_drive_minutes_per_day,
+            )
+        return out
+
+    @staticmethod
+    def _sequence_problems(
+        quote: Quote, sequenced: dict[uuid.UUID, Sequenced]
+    ) -> list[Problem]:
+        """The sequencing faults, named by the option they belong to."""
+        order = {option.id: option.sort_order for option in quote.options}
+        return [
+            Problem(
+                BLOCKING if problem.blocking else ADVISORY,
+                problem.code,
+                f"Option {order.get(option_id, 0)}: {problem.message}",
+            )
+            for option_id, result in sequenced.items()
+            for problem in result.problems
+        ]
+
+    async def _destination_place_names(self, quote: Quote) -> dict[uuid.UUID, str]:
+        """Names for every destination this quote's packages visit."""
+        wanted = {
+            leg.destination_id for option in quote.options for leg in option.legs
+        }
+        if not wanted:
+            return {}
+        rows = (
+            (
+                await self.db.execute(
+                    select(Destination).where(Destination.id.in_(wanted))
+                )
+            )
+            .scalars()
+            .all()
+        )
+        return {row.id: row.name for row in rows}
+
     @staticmethod
     def _movements(
         quote: Quote, roads: Mapping[int, Road] | None = None
@@ -623,7 +750,13 @@ class QuoteAssemblyService:
         # engine derived them — that is, none at all.
         await self.db.refresh(quote, ["options", "rejected_candidates"])
 
-        readiness = self._grade(quote, priced, cfg)
+        sequenced = await self._sequenced(quote, cfg)
+        readiness = self._grade(
+            quote,
+            priced,
+            cfg,
+            sequencing=self._sequence_problems(quote, sequenced),
+        )
         blocking = [p for p in readiness.problems if p.severity == BLOCKING]
         if blocking:
             raise AppError(
@@ -657,6 +790,7 @@ class QuoteAssemblyService:
                 readiness,
                 destinations=await self._destination_names(priced),
                 residences=await self._residence_labels(),
+                driving=sequenced,
             ),
             currency=headline.currency,
             created_by=actor_id,
@@ -789,6 +923,29 @@ def _money(value: Decimal) -> Decimal:
     return value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
+def _driving(sequenced: Sequenced | None) -> dict | None:
+    """One package's driving, as JSON. ``None`` where there was nothing to grade.
+
+    The longest single drive is kept beside the total on purpose: two
+    itineraries of a thousand kilometres are different trips if one of them is
+    a single fifteen-hour push, and an operator comparing them needs to see
+    which. ``unknown_hops`` is the honesty column — every other figure here is
+    an understatement by exactly that many drives.
+    """
+    if sequenced is None:
+        return None
+    score = sequenced.score
+    return {
+        "total_km": str(score.total_km),
+        "total_minutes": score.total_minutes,
+        "longest_minutes": score.longest_minutes,
+        "unknown_hops": score.unknown_hops,
+        "hops": score.hops,
+        "better_order": list(sequenced.better_order),
+        "saving_km": str(sequenced.saving_km),
+    }
+
+
 def _snapshot(
     quote: Quote,
     priced: OptionPricingResult,
@@ -796,6 +953,7 @@ def _snapshot(
     *,
     destinations: dict[uuid.UUID, str] | None = None,
     residences: dict[str, str] | None = None,
+    driving: dict[uuid.UUID, Sequenced] | None = None,
 ) -> dict:
     """The whole computed quote as JSON, for reconstructing it years later.
 
@@ -812,6 +970,7 @@ def _snapshot(
     # With the drive times the route table found, so the frozen programme can
     # say how long a day on the road is (§4.2).
     movements = QuoteAssemblyService._movements(quote, priced.transport.roads)
+    driving = driving or {}
     return {
         "quote_number": quote.quote_number,
         "currency": quote.presentation_currency.upper(),
@@ -890,6 +1049,11 @@ def _snapshot(
                     }
                     for leg in o.legs
                 ],
+                # What this package costs in road (§4.3). Frozen with the
+                # figures for the same reason: a route re-measured next month
+                # must not change what this version says the trip was. Absent
+                # for a single-property option, which has no order to grade.
+                "driving": _driving(driving.get(o.option_id)),
                 # The day-by-day programme as quoted (Stage 4.1). Frozen
                 # per option, because which day the client is where depends on
                 # the package they choose — and frozen at all for the reason

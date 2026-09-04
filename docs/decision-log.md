@@ -1227,3 +1227,46 @@ only way to load one was to edit a seed script. A blocking message whose fix nee
 not a fix. `POST /destinations/{id}/transfer-rates` and `.../transport-modes` close it; the
 latter refuses `air` with the licence reason rather than a list of permitted values, because an
 operator who reads "must be one of road, rail" will assume air is coming.
+
+**Contiguity is not drivability** (Stage 4.3, 2026-09-04)
+A package is contiguous by construction (§3.9) — every night has a bed, blocking — and that says
+nothing whatever about the roads between the beds. Nairobi to Amboseli to the Mara and back is
+perfectly contiguous and puts a twelve-hour drive on a day the document calls a transfer, arriving
+at a park gate after it has shut. Nothing in the quote shows it: the price is right, the nights add
+up, and the failure happens on the road. §4.2 put the distances on file; this is the pass that
+reads the map.
+
+**Every sequencing fault is advisory, and that is a decision.** Each one is a trip that can be sold
+and a trip somebody should look at twice — and the agent may know the long day is exactly what the
+client asked for. A blocking rule here would have the system arguing with the person who spoke to
+them. The blocking rules in this area are about money or deliverability and live elsewhere: a
+movement with no tariff (§3.10), a road the vehicle cannot take (§4.2).
+
+**Nothing is reordered, only reported.** Packages are curated, not enumerated (§3.9). A shorter
+ordering is named with its saving and the note says why it may be deliberate — a flight time, a
+lodge's availability, a migration crossing — because none of those are facts this module holds.
+Ends stay fixed: the first leg is where the client lands and the last is where they fly home from,
+so only the middle is permuted, capped at seven legs because permutations are factorial.
+
+**No ordering is recommended on the strength of roads we do not have.** A missing route contributes
+nothing to a partial sum, so comparing a fully-known ordering against one missing two roads would
+recommend the itinerary we know least about, every time. `order_km` returns `None` rather than a
+short total, and the score keeps `unknown_hops` beside the figures so a total that is really a
+floor says so.
+
+**The score is not a single number.** Total kilometres, total hours, the longest single drive and
+the unknown hops, kept apart: two thousand-kilometre itineraries are different trips if one of them
+is a single fifteen-hour push, and a collapsed score would be comparable and useless. It is frozen
+per option on the version and printed on the worksheet's option header beside the route, which is
+where an operator is already comparing packages.
+
+**"Too long to drive in a day" is configuration.** `max_drive_minutes_per_day`, ten hours by
+default — a dawn start and an arrival before the gates shut. It is a commercial judgement about
+what Heissal is willing to put in front of a client, not a fact about roads, and it is the kind
+that changes the first time one complains.
+
+**A cache bug the test caught:** the shorter-order search asks about roads the given itinerary
+never uses, which is the whole point of it. The first version looked up only the drives already
+sequenced, so every alternative ordering read as a road with no row on file and nothing was ever
+suggested. Every pair among a package's destinations is now resolved once and cached across
+options.

@@ -71,6 +71,14 @@ class PricingConfig(BaseModel):
     min_self_catering_options: int = Field(default=1, ge=0)
     max_self_catering_options: int = Field(default=2, ge=0)
 
+    # --- Stage 4.3 itinerary sequencing ----------------------------------- #
+    # How much driving this operation is willing to sell in one day. Ten hours
+    # by default, which on Kenyan roads is a dawn start and an arrival before
+    # the park gates shut. Configuration rather than a literal because it is a
+    # commercial judgement about what Heissal will put in front of a client,
+    # and the kind that changes the first time one complains.
+    max_drive_minutes_per_day: int = Field(default=600, ge=60)
+
     def rounding_for(self, currency: str) -> Decimal:
         """The per-person rounding step for one currency.
 
