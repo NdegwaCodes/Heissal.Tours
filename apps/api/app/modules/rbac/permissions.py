@@ -94,6 +94,14 @@ PERMISSIONS: dict[str, str] = {
     # the person who books a trip is not always the person who reconciles the
     # bank statement.
     "booking:record_payment": "Record payments received against a booking",
+    # --- Stage 5.3: the contact log ---
+    "comm:read": "Read the record of calls, emails and meetings",
+    "comm:log": "Log a call, email, message, meeting or internal note",
+    # Its own permission, and not "manage": amending or voiding an entry moves
+    # figures somebody has already reported — when the client was last spoken
+    # to, how many times they were chased, how fast the enquiry was answered.
+    # Recording a call and rewriting the record of one are different acts.
+    "comm:amend": "Amend or void a logged conversation",
 }
 
 # Reference read/manage permission keys, grouped for role assignment.
@@ -141,6 +149,10 @@ ROLE_DEFINITIONS: dict[str, RoleDefinition] = {
             # under the brand's name (§4.4).
             "lead:read",
             "lead:manage",
+            # An agent logs what was said and reads it back. Amending the log
+            # is not theirs: it changes their own response times.
+            "comm:read",
+            "comm:log",
             "quote:record_outcome",
             "narrative:read",
             "narrative:manage",

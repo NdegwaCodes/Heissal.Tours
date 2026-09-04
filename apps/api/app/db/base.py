@@ -30,6 +30,7 @@ from app.modules.bookings.models import (  # noqa: F401
     Payment,
 )
 from app.modules.clients.models import Client  # noqa: F401
+from app.modules.comms.models import Communication  # noqa: F401
 from app.modules.currency.models import Currency, ExchangeRate  # noqa: F401
 from app.modules.destinations.models import Destination  # noqa: F401
 from app.modules.leads.models import (  # noqa: F401

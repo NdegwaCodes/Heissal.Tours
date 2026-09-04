@@ -160,6 +160,13 @@ class SourceCountRead(BaseModel):
 class PipelineRead(BaseModel):
     stages: list[StageCountRead]
     sources: list[SourceCountRead]
+    #: Median hours from an enquiry arriving to the first word back (§5.3), and
+    #: how many got none at all. A pair on purpose: a fast median over the
+    #: answered half of an inbox says nothing about the half nobody opened, and
+    #: counting the unanswered ones as zeros would hide exactly the enquiries
+    #: worth finding.
+    median_first_response_hours: Decimal | None = None
+    never_answered: int = 0
     #: Open leads' stated budgets, per currency, and never summed across them.
     #: A soft figure, labelled as one: it is what clients said.
     open_budget: dict[str, Decimal]

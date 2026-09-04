@@ -1489,3 +1489,101 @@ Exposed by a full-suite run of the §7.1 booking tests: the new writes changed w
 the same millisecond, and a §3.12 worksheet test that asserts the cohort rows in order started
 failing about one run in two. Worth noting how it surfaced — it had been latent since §3.8, and the
 only reason it was ever visible is that one test asserts on order rather than on a set.
+
+**A stage column was standing in for an activity log** (Stage 5.3, 2026-09-04)
+§5.2 shipped with the limitation written into its own docstring: `Watched.stage_since` was
+described as *"the closest thing to when somebody last did something without a full activity
+log."* Stage 5.3 is that log — `communications`, one row per call, email, message, meeting or
+internal note — and it exists because three questions a sales operation runs on were
+unanswerable without it.
+
+**When somebody last actually spoke to them.** An agent can call a client every week without
+moving a stage, and a lead can be dragged across three stages while nobody has picked up the
+phone. Staleness measured by stage movement was measuring the wrong thing; it is now measured
+against the log, and the message says which of the two it means, because "at Quoted for 34 days"
+and "not spoken to for 34 days" call for different actions.
+
+**Whether the client is replying.** "Chased four times since 12 August, no reply" is the
+temperature of a deal. A stage of *Negotiating* reports the opposite while being technically
+true, which is the one place a pipeline reads as reassuring while a deal is dying.
+
+**How fast the first reply went out.** In travel sales this is close to the whole game, and it
+needs the arrival time and the first outbound word — there was no second half of that pair. The
+pipeline report now carries a median beside a count of the enquiries that never got one: a fast
+median over the answered half of an inbox says nothing about the half nobody opened, and folding
+the unanswered ones in as zeros would hide exactly the enquiries worth finding.
+
+**It is a log, not a mailbox.** Nothing sends anything. Sending mail from the platform means a
+provider, a domain that passes SPF and DKIM, and a mailbox somebody actually reads the replies
+in — none of which exists, and a half-built sender that silently fails to deliver a quotation is
+worse than an agent using Gmail and typing what they sent. `external_ref` is the seam: a provider
+message id lands there and the rows do not change. **Issuing a quotation deliberately does not
+auto-log a "sent" entry either** — we do not know that it was sent, and an entry the system
+invented is the same lie as one an agent got wrong.
+
+**`occurred_at` is not `created_at`.** Almost everything here is written up after the fact,
+between calls or on Friday afternoon. Every figure uses when it happened; measuring a response
+time against when the notes were typed would flatter whoever writes them up promptly. The stamps
+take the *later* of the two, so a Tuesday call logged on Friday cannot move "last contacted"
+backwards past Thursday's email.
+
+**An internal note is not contact.** Half of what gets logged is a note to ourselves — "her
+sister is the one paying", "the villa is held until Friday". Recording those as outbound would
+tell the attention rules the client had been contacted when nobody had, which is how an
+unanswered enquiry hides on a dashboard. So there are three directions, and it is a CHECK
+constraint: unlike a channel, there is no fourth direction a conversation can go.
+
+**The channel is not an enum.** Channels multiply — a client moves to WhatsApp mid-enquiry, an
+agent uses Instagram DMs — and an entry refused because "instagram" is not in a list is a call
+nobody records. Normalised with the same fold as §5.2's lead sources, so one convention covers
+both CRM modules.
+
+**An unanswered call is a fact worth keeping.** "We have tried four times and never got them"
+needs a different next step from "we spoke and they went quiet", so `reached` is recorded and
+unreached calls are counted separately. A call that was not answered has no length, which is a
+refusal in the rules and a CHECK constraint in the table — a nineteen-minute unanswered call is
+the kind of nonsense that arrives through a script rather than through the API.
+
+**It attaches to a lead, a client, a quote or a booking.** `subject`/`subject_id` as in §4.4's
+narratives, not four nullable foreign keys. The talking does not stop when a lead is won: it
+moves to the quote, then the booking, then the trip, and a log that only knew about leads would
+lose every word exchanged about the trip that was actually sold. A lead's timeline therefore
+gathers its client's, its quotes' and its bookings' entries. A call logged against a quote still
+stamps that quote's lead, because an agent who logs it in the obvious place has not failed to
+make the call.
+
+**But a client-level call does not stamp a lead.** One client has many leads over the years, and
+counting a call about this year's trip as contact on last year's dormant enquiry would make every
+repeat client's old leads read as freshly spoken to.
+
+**Nothing is deleted.** A wrong entry is amended — and the row says it was amended, though not
+what it used to say: the question worth answering is "was the figure I am reading computed on
+these words", and the stamp answers it. A history table for a history table is a cost with no
+second payoff. An entry in the wrong place is **voided**: it stays visible, marked, with a
+required reason, and counts towards nothing — not the last contact, not the response time, not
+the chases. The call logged against the wrong client is still the record of what somebody
+believed, and a vanished row leaves the next person wondering why a figure changed. The subject
+and the direction cannot be amended at all, because those are facts about a different
+conversation and two leads' figures were computed from them.
+
+**`comm:amend` is its own permission**, and not "manage". Recording a call and rewriting the
+record of one are different acts: an amendment moves the response times and chase counts an agent
+is measured by, so a sales agent logs and reads and does not amend.
+
+**Two stamps are denormalised onto `leads`.** `last_contact_at` and `last_inbound_at`, because
+the morning list runs over every open lead and a correlated subquery per lead is what makes a
+list slow enough to stop being opened. Allowed only because they are derivable:
+`CommsService.recompute` rebuilds both from the log, and a test corrupts them the way a data
+import would and proves the rebuild agrees with what incremental logging kept.
+
+**A new first place on the morning list.** An enquiry nobody has answered at all now outranks
+everything, including a missing next action. It is not a lead at risk — it is a customer already
+lost and a reputation being spent — and with only a stage column, a lead nobody had replied to and
+one somebody had spoken to twice were the same row. This changed one §5.2 test, which now logs a
+call before asserting that the missing next action is the top reason.
+
+**And, as in §5.2, it refuses to conclude.** Nothing here decides that a lead is dead or that
+silence means no. Both silence thresholds (attempts, days) are the caller's, both must be met,
+and the message says in as many words that whether it is a no is a judgement about this client
+rather than something a report can make. Two chases in two days is a keen agent; two over three
+weeks is a client who has booked elsewhere, and no default can tell them apart.

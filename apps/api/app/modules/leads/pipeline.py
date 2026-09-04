@@ -32,6 +32,11 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 
+# The one import across the two CRM modules, and it goes this way round on
+# purpose: the contact log knows nothing about pipelines, and the pipeline is
+# what has to answer "how fast did we reply".
+from app.modules.comms.rules import median_hours
+
 # Why a lead is on somebody's list this morning. Ordered by how much it should
 # worry them.
 NO_NEXT_ACTION = "lead_no_next_action"
@@ -39,6 +44,13 @@ OVERDUE = "lead_next_action_overdue"
 DUE = "lead_next_action_due"
 UNOWNED = "lead_unowned"
 STALE = "lead_untouched"
+#: An enquiry that arrived and was never answered (§5.3). Worse than any of the
+#: above and previously unsayable: with only a stage column, a lead nobody had
+#: replied to looked exactly like one somebody had spoken to twice.
+NEVER_CONTACTED = "lead_never_contacted"
+#: Chased, with nothing back. The temperature of a deal, which a stage of
+#: "Negotiating" reports as the opposite while being technically true.
+UNANSWERED = "lead_chased_unanswered"
 
 
 class StageRefused(ValueError):
@@ -156,15 +168,35 @@ class Watched:
 
     name: str
     stage: Stage
-    #: When the lead last moved stage, which is the closest thing to "when
-    #: somebody last did something" without a full activity log.
+    #: When the lead last moved stage. This used to be the closest thing to
+    #: "when somebody last did something" available, and §5.3 gave it a
+    #: better one: an agent can call a client weekly without moving a stage,
+    #: and a lead can be dragged across three stages while nobody has picked
+    #: up the phone. It is now the **fallback**, used where there is no
+    #: contact log to read.
     stage_since: date | None = None
     next_action_on: date | None = None
     owner: str | None = None
+    #: The last time anybody spoke to the client, from the §5.3 log. ``None``
+    #: means never — which is a different and worse thing than "a while ago".
+    last_contact_on: date | None = None
+    #: The last time the *client* said anything. Silence after four calls is
+    #: what a pipeline report cannot see and an agent needs to.
+    last_inbound_on: date | None = None
+    #: Outbound attempts since they last replied.
+    chases: int = 0
+    #: Whether anything at all has been logged against this lead. Kept apart
+    #: from ``last_contact_on`` being None so that a lead with three internal
+    #: notes and no call still reads as never contacted, because it is.
+    logged: int = 0
 
 
 def attention(
-    lead: Watched, *, today: date, stale_after_days: int = 14
+    lead: Watched,
+    *,
+    today: date,
+    stale_after_days: int = 14,
+    chase_threshold: int = 3,
 ) -> list[Attention]:
     """Why this lead needs looking at, worst first.
 
@@ -176,6 +208,22 @@ def attention(
         return []
 
     out: list[Attention] = []
+    if lead.last_contact_on is None:
+        # First of all, ahead even of a missing next action: an enquiry that
+        # arrived and was never answered is not a lead at risk, it is a
+        # customer already lost and a reputation being spent. Before §5.3 this
+        # was unsayable — a lead nobody had replied to and one somebody had
+        # spoken to twice were the same row.
+        waiting = (today - lead.stage_since).days if lead.stage_since else 0
+        out.append(
+            Attention(
+                NEVER_CONTACTED,
+                f"Nobody has contacted {lead.name} at all"
+                + (f", {waiting} day(s) after the enquiry arrived" if waiting else "")
+                + ("." if not lead.logged else ", though there are notes on it."),
+                days=waiting,
+            )
+        )
     if lead.next_action_on is None:
         # First, and deliberately: a lead with no next action appears on no
         # other list, annoys nobody, and dies quietly.
@@ -206,13 +254,42 @@ def attention(
             )
         )
 
-    if lead.stage_since is not None:
-        idle = (today - lead.stage_since).days
+    # Silence is measured against the last time we *reached out*, not against
+    # the stage: four unanswered emails leave a lead sitting at Negotiating,
+    # which is the one place a stage column reads as reassuring while the deal
+    # is dying.
+    if lead.chases >= chase_threshold:
+        out.append(
+            Attention(
+                UNANSWERED,
+                f"{lead.name} has been chased {lead.chases} time(s) "
+                + (
+                    "since they last replied"
+                    if lead.last_inbound_on
+                    else "and has never replied"
+                )
+                + ". Whether that is a no is a judgement about this client, "
+                "not something a report can make.",
+                days=lead.chases,
+            )
+        )
+
+    # Untouched, measured against the log where there is one and the stage move
+    # only where there is not. The message says which, because "at Quoted for
+    # 34 days" and "not spoken to for 34 days" call for different actions and
+    # a list that conflated them was quietly wrong about both.
+    since, what = (
+        (lead.last_contact_on, "has not been contacted for")
+        if lead.last_contact_on is not None
+        else (lead.stage_since, f"has been at {lead.stage.name} for")
+    )
+    if since is not None:
+        idle = (today - since).days
         if idle >= stale_after_days:
             out.append(
                 Attention(
                     STALE,
-                    f"{lead.name} has been at {lead.stage.name} for {idle} "
+                    f"{lead.name} {what} {idle} "
                     f"day(s). Not necessarily cold — a honeymoon enquiry for "
                     f"next August is not stale at three weeks — but worth a "
                     f"decision.",
@@ -242,6 +319,11 @@ class Counted:
     #: is what links a source to money rather than to activity.
     quotes: int = 0
     accepted: bool = False
+    #: Hours from the enquiry arriving to the first word back (§5.3), or
+    #: ``None`` where nobody has answered it yet. Never zero for an unanswered
+    #: one: a zero would average away the enquiries that were simply dropped,
+    #: which are the ones worth finding.
+    first_response_hours: Decimal | None = None
 
 
 @dataclass
@@ -279,6 +361,12 @@ class SourceCount:
 class Pipeline:
     stages: list[StageCount] = field(default_factory=list)
     sources: list[SourceCount] = field(default_factory=list)
+    #: Median hours to first reply, over the enquiries that got one (§5.3), and
+    #: how many got none at all. Reported as a pair on purpose: a fast median
+    #: over the answered half of an inbox says nothing about the half nobody
+    #: opened.
+    median_first_response_hours: Decimal | None = None
+    never_answered: int = 0
     #: Open leads' stated budgets, per currency. A soft figure and labelled as
     #: one: it is what clients said, not what anything is worth.
     open_budget: dict[str, Decimal] = field(default_factory=dict)
@@ -362,6 +450,19 @@ def summarise(
         for stage in sorted(stages, key=lambda one: one.sort_order)
     ]
     out.sources = sorted(by_source.values(), key=lambda one: -one.leads)
+
+    # First response, over the enquiries that got one — and separately, the
+    # count that got none. The pair rather than one number: an inbox with a
+    # brilliant median and eleven unopened enquiries is not a fast inbox, and
+    # folding the unanswered ones in as zeros or as a large figure would make
+    # them either invisible or indistinguishable from a slow reply.
+    answered = [
+        lead.first_response_hours
+        for lead in watched
+        if lead.first_response_hours is not None
+    ]
+    out.median_first_response_hours = median_hours(answered)
+    out.never_answered = len(watched) - len(answered)
     return out
 
 

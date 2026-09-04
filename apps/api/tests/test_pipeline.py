@@ -24,9 +24,11 @@ import pytest
 
 from app.modules.leads.pipeline import (
     DUE,
+    NEVER_CONTACTED,
     NO_NEXT_ACTION,
     OVERDUE,
     STALE,
+    UNANSWERED,
     UNOWNED,
     Counted,
     Stage,
@@ -162,6 +164,10 @@ def _watched(**over):
         "stage_since": TODAY,
         "next_action_on": TODAY,
         "owner": "agent-1",
+        # Contacted today unless a test says otherwise (§5.3). The default
+        # matters: a lead nobody has spoken to at all is the worst thing on the
+        # list, so leaving this out would put every case below on it.
+        "last_contact_on": TODAY,
     }
     fields.update(over)
     return Watched(**fields)
@@ -198,7 +204,7 @@ def test_an_unowned_lead_is_nobodys_to_lose():
     assert any(one.code == UNOWNED for one in found)
 
 
-def test_a_lead_sitting_at_one_stage_is_reported_but_not_judged():
+def test_a_lead_nobody_has_touched_is_reported_but_not_judged():
     """Reported against a threshold, and the message refuses to conclude.
 
     A honeymoon enquiry for next August is not cold at three weeks, so the
@@ -206,22 +212,117 @@ def test_a_lead_sitting_at_one_stage_is_reported_but_not_judged():
     closes it.
     """
     found = attention(
-        _watched(stage_since=date(2026, 8, 1)), today=TODAY, stale_after_days=14
+        _watched(last_contact_on=date(2026, 8, 1)),
+        today=TODAY,
+        stale_after_days=14,
     )
     stale = next(one for one in found if one.code == STALE)
     assert stale.days == 34
+    assert "has not been contacted for" in stale.message
     assert "Not necessarily cold" in stale.message
     assert "worth a decision" in stale.message
 
 
+def test_staleness_falls_back_to_the_stage_where_there_is_no_log():
+    """§5.2 measured staleness by stage movement because it had nothing better.
+
+    §5.3 gave it the log, and the two are different questions: an agent can
+    call a client weekly without moving a stage. Where there is no log at all
+    the stage move is still the best available answer — and the message says
+    which of the two it is talking about, because "at Quoted for 34 days" and
+    "not spoken to for 34 days" call for different actions.
+    """
+    found = attention(
+        _watched(last_contact_on=None, stage_since=date(2026, 8, 1)),
+        today=TODAY,
+        stale_after_days=14,
+    )
+    stale = next(one for one in found if one.code == STALE)
+    assert stale.days == 34
+    assert "has been at Quoted for" in stale.message
+
+
 def test_the_stale_threshold_is_the_callers():
     """It is a judgement about a market, so the business sets it."""
-    lead = _watched(stage_since=date(2026, 8, 25), next_action_on=date(2026, 9, 20))
+    lead = _watched(
+        last_contact_on=date(2026, 8, 25), next_action_on=date(2026, 9, 20)
+    )
     assert [
         one.code for one in attention(lead, today=TODAY, stale_after_days=7)
     ] == [STALE]
-    # Ten days at a stage is nothing to a business that sells trips a year out.
+    # Ten days is nothing to a business that sells trips a year out.
     assert attention(lead, today=TODAY, stale_after_days=30) == []
+
+
+# --------------------------------------------------------------------------- #
+# What the contact log made sayable (§5.3)
+# --------------------------------------------------------------------------- #
+
+
+def test_an_enquiry_nobody_has_answered_outranks_everything():
+    """Not a lead at risk — a customer already lost, and unsayable before §5.3.
+
+    With only a stage column, a lead nobody had replied to and one somebody had
+    spoken to twice were the same row.
+    """
+    found = attention(
+        _watched(last_contact_on=None, stage_since=date(2026, 9, 1), next_action_on=None),
+        today=TODAY,
+    )
+    assert found[0].code == NEVER_CONTACTED
+    assert found[0].days == 3
+    assert "3 day(s) after the enquiry arrived" in found[0].message
+    # And it does not hide the missing next action, which is a second problem.
+    assert NO_NEXT_ACTION in {one.code for one in found}
+
+
+def test_internal_notes_are_not_contact():
+    """Three notes to ourselves and no call is still nobody having called.
+
+    The lead carries a count of everything logged so the message can say so
+    rather than implying the log is empty.
+    """
+    found = attention(
+        _watched(last_contact_on=None, logged=3, stage_since=TODAY), today=TODAY
+    )
+    never = next(one for one in found if one.code == NEVER_CONTACTED)
+    assert "though there are notes on it" in never.message
+
+
+def test_a_lead_chased_into_silence_is_reported_not_concluded():
+    """The temperature of a deal, which a stage of Negotiating reads as the opposite.
+
+    Four unanswered emails leave a lead sitting at Negotiating — technically
+    true and the single most misleading cell on a pipeline report.
+    """
+    found = attention(
+        _watched(chases=4, last_inbound_on=None), today=TODAY, chase_threshold=3
+    )
+    quiet = next(one for one in found if one.code == UNANSWERED)
+    assert quiet.days == 4
+    assert "chased 4 time(s) and has never replied" in quiet.message
+    assert "not something a report can make" in quiet.message
+
+
+def test_the_chase_threshold_is_the_callers_too():
+    """Two chases in two days is a keen agent; the business decides."""
+    lead = _watched(chases=2)
+    assert UNANSWERED in {
+        one.code for one in attention(lead, today=TODAY, chase_threshold=2)
+    }
+    assert UNANSWERED not in {
+        one.code for one in attention(lead, today=TODAY, chase_threshold=3)
+    }
+
+
+def test_silence_since_a_reply_reads_differently_from_never_replying():
+    found = attention(
+        _watched(chases=3, last_inbound_on=date(2026, 8, 20)),
+        today=TODAY,
+        chase_threshold=3,
+    )
+    quiet = next(one for one in found if one.code == UNANSWERED)
+    assert "since they last replied" in quiet.message
 
 
 def test_a_closed_lead_needs_nothing():

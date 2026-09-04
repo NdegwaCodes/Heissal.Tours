@@ -351,9 +351,25 @@ async def test_moving_a_lead_where_it_already_is_is_refused(
 async def test_a_lead_with_no_next_action_is_first_on_the_list(
     client, admin_tokens, swept
 ):
-    """The one that would otherwise die quietly."""
+    """The one that would otherwise die quietly.
+
+    First on the list — except where the lead has never been contacted at all,
+    which §5.3 made sayable and which is worse: not a lead at risk but a
+    customer already lost. So this one is contacted first, and the missing next
+    action is then the only thing wrong with it.
+    """
     h = _h(admin_tokens)
     lead = await _lead(client, h, swept)
+    logged = await client.post(
+        f"{API}/leads/{lead['id']}/communications",
+        headers=h,
+        json={
+            "channel": "call",
+            "direction": "outbound",
+            "body": "Talked it through; nothing agreed.",
+        },
+    )
+    assert logged.status_code == 201, logged.text
     cleared = await client.patch(
         f"{API}/leads/{lead['id']}", headers=h, json={"next_action_on": None}
     )

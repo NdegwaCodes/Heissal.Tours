@@ -170,6 +170,22 @@ class Lead(UUIDPKMixin, TimestampMixin, Base):
     next_action_on: Mapped[date | None] = mapped_column(Date, nullable=True)
     next_action_note: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    # -- what the contact log says, kept here on purpose (§5.3) ------------- #
+    # Denormalised from ``communications``, and maintained by the comms
+    # service. The attention list runs over every open lead, and a correlated
+    # subquery per lead for "when did we last speak to them" is exactly the
+    # kind of cost that makes a morning list slow enough to stop being opened.
+    # Safe to denormalise because it is derivable: ``CommsService.recompute``
+    # rebuilds both from the log, and a test proves it agrees.
+    last_contact_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    #: When the *client* last said something. Its own column because silence
+    #: after four chases is the fact a stage column reports as Negotiating.
+    last_inbound_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     #: Why a lost lead was lost, in the words of whoever closed it. The stage
     #: says "lost"; this says whether we were expensive, slow, or unlucky.
     lost_reason: Mapped[str | None] = mapped_column(Text, nullable=True)

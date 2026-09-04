@@ -114,17 +114,31 @@ async def list_leads(
 async def leads_needing_attention(
     owner_id: uuid.UUID | None = Query(default=None),
     stale_after_days: int = Query(default=14, ge=1, le=365),
+    chase_threshold: int = Query(
+        default=3,
+        ge=1,
+        le=50,
+        description="Unanswered attempts before a lead is reported as chased.",
+    ),
     db: AsyncSession = Depends(get_db),
     _=Depends(require_permission(READ)),
 ):
     """The morning list: every open lead that needs looking at, worst first.
 
-    Leads with **no next action** come first, deliberately. One with nothing
-    scheduled appears on no other list, annoys nobody, and dies quietly — it is
-    the commonest way a CRM stops being used.
+    An enquiry **nobody has answered at all** comes first (§5.3): it is not a
+    lead at risk, it is a customer already lost, and it was unsayable while the
+    only evidence was a stage column. Then leads with **no next action**, which
+    appear on no other list, annoy nobody, and die quietly.
+
+    Both thresholds are the caller's, and neither concludes anything. Staleness
+    is now measured against the contact log rather than the last stage move —
+    the two are different questions, and only one of them is what somebody
+    meant by "untouched".
     """
     found = await LeadService(db).needs_attention(
-        owner_id=owner_id, stale_after_days=stale_after_days
+        owner_id=owner_id,
+        stale_after_days=stale_after_days,
+        chase_threshold=chase_threshold,
     )
     return [
         LeadAttentionRead(
@@ -145,6 +159,10 @@ async def pipeline_summary(
     Sources are answerable for **bookings**, not for enquiries: the win column
     comes from the quotes a lead produced and the outcome recorded on them
     (§5.1), which is the join that decides where marketing money goes.
+
+    Since §5.3 it also carries the figure travel sales actually turns on: how
+    fast the first reply went out, beside a count of the enquiries that never
+    got one.
     """
     service = LeadService(db)
     report = await service.summary()
@@ -160,6 +178,8 @@ async def pipeline_summary(
             )
             for one in report.sources
         ],
+        median_first_response_hours=report.median_first_response_hours,
+        never_answered=report.never_answered,
         open_budget=report.open_budget,
         open_leads=report.open_leads,
         won_leads=report.won_leads,

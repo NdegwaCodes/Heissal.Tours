@@ -22,8 +22,12 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import AppError, NotFoundError
+from app.modules.comms.rules import first_response_hours, history
+from app.modules.comms.service import CommsService
 from app.modules.leads.models import COMMON_SOURCES, Lead, LeadStage, LeadStageEvent
 from app.modules.leads.pipeline import (
+    NEVER_CONTACTED,
+    NO_NEXT_ACTION,
     Attention,
     Counted,
     Pipeline,
@@ -340,6 +344,7 @@ class LeadService:
         *,
         owner_id: uuid.UUID | None = None,
         stale_after_days: int = 14,
+        chase_threshold: int = 3,
         today: date | None = None,
     ) -> list[tuple[Lead, list[Attention]]]:
         """Every open lead that needs looking at, and why.
@@ -354,10 +359,18 @@ class LeadService:
         if owner_id is not None:
             stmt = stmt.where(Lead.owner_id == owner_id)
         leads = list((await self.db.execute(stmt)).scalars().all())
+        # One call for the whole list (§5.3). Staleness used to be measured by
+        # stage movement because there was nothing else; it is now measured by
+        # when somebody last spoke to the client, which is what the question
+        # meant all along.
+        logged = await CommsService(self.db).contacts_for_leads(
+            [lead.id for lead in leads]
+        )
 
         out: list[tuple[Lead, list[Attention]]] = []
         for lead in leads:
             stage = await self.db.get(LeadStage, lead.stage_id)
+            log = history(logged.get(lead.id, []))
             found = attention(
                 Watched(
                     name=lead.contact_name,
@@ -365,14 +378,26 @@ class LeadService:
                     stage_since=lead.stage_since.date() if lead.stage_since else None,
                     next_action_on=lead.next_action_on,
                     owner=str(lead.owner_id) if lead.owner_id else None,
+                    last_contact_on=(
+                        log.last_contact_at.date() if log.last_contact_at else None
+                    ),
+                    last_inbound_on=(
+                        log.last_inbound_at.date() if log.last_inbound_at else None
+                    ),
+                    chases=log.chases,
+                    logged=log.entries,
                 ),
                 today=when,
                 stale_after_days=stale_after_days,
+                chase_threshold=chase_threshold,
             )
             if found:
                 out.append((lead, found))
         out.sort(key=lambda pair: (-max(one.days for one in pair[1]), pair[0].contact_name))
-        out.sort(key=lambda pair: 0 if _has_no_next_action(pair[1]) else 1)
+        # Worst first, and "worst" is a rank rather than an age: an enquiry
+        # nobody has answered at all outranks a lead with a missing next
+        # action, which outranks everything else.
+        out.sort(key=lambda pair: _rank(pair[1]))
         return out
 
     async def summary(self, *, today: date | None = None) -> Pipeline:
@@ -409,6 +434,9 @@ class LeadService:
             .all()
         )
 
+        logged = await CommsService(self.db).contacts_for_leads(
+            [lead.id for lead in leads]
+        )
         counted = [
             Counted(
                 stage=_stage(by_id.get(lead.stage_id)),
@@ -418,6 +446,12 @@ class LeadService:
                 budget_currency=lead.budget_currency,
                 quotes=int(quoted.get(lead.id, 0)),
                 accepted=lead.id in accepted,
+                # Measured from the row's own ``created_at`` — when the enquiry
+                # was recorded — to the first word back (§5.3). The metric
+                # travel sales turns on, and unanswerable until there was a log.
+                first_response_hours=first_response_hours(
+                    lead.created_at, logged.get(lead.id, [])
+                ),
             )
             for lead in leads
         ]
@@ -426,10 +460,20 @@ class LeadService:
         )
 
 
-def _has_no_next_action(found: list[Attention]) -> bool:
-    from app.modules.leads.pipeline import NO_NEXT_ACTION
+def _rank(found: list[Attention]) -> int:
+    """How far up the morning list these reasons put a lead.
 
-    return any(one.code == NO_NEXT_ACTION for one in found)
+    An enquiry **never answered** first: it is not a lead at risk, it is a
+    customer already lost and a reputation being spent, and before §5.3 there
+    was no way to say it. Then a missing next action, because such a lead
+    appears on no list, annoys nobody, and dies quietly.
+    """
+    codes = {one.code for one in found}
+    if NEVER_CONTACTED in codes:
+        return 0
+    if NO_NEXT_ACTION in codes:
+        return 1
+    return 2
 
 
 def _stage(row: LeadStage | None) -> Stage:

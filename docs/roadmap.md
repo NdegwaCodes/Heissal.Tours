@@ -325,7 +325,7 @@ the group total derived from it so the two always reconcile.
   - ☐ **Still with the client:** whether generated copy should go in front of clients at all, and
     which provider. Nothing generated can reach a document until both are answered
 
-## Stage 5 — CRM  ◑
+## Stage 5 — CRM  ☑
 - ☑ 5.1 **Quote outcomes and conversion** (`app/modules/quotes/outcomes.py`, migration
   `f11242360320`, 30 tests) — `accepted`, `declined` and `expired` had been declared statuses
   since Stage 2 with **nothing able to set them**, so no quote had ever been won or lost and every
@@ -355,7 +355,24 @@ the group total derived from it so the two always reconcile.
     message refuses to conclude
   - `quotes.lead_id` closes §5.1's missing join: a **source is answerable for bookings**, counted
     over all its enquiries rather than over the ones that reached a quote
-- ☐ Communications (logging calls and emails against a lead)
+- ☑ 5.3 **The contact log** (`app/modules/comms/`, migration `53e05704e2f9`, 56 tests) — calls,
+  emails, messages, meetings and internal notes, against a lead, a client, a quote or a booking.
+  §5.2 shipped saying `stage_since` was "the closest thing to when somebody last did something
+  without a full activity log"; this is that log
+  - **Staleness now means untouched by anybody**, not untouched by stage movement. An agent can
+    call a client weekly without moving a stage, and a lead can be dragged across three stages
+    while nobody has picked up the phone
+  - **An enquiry nobody has answered is first on the morning list**, above a missing next action.
+    Not a lead at risk — a customer already lost, and unsayable with only a stage column
+  - **"Chased four times, no reply"** is reported. A stage of *Negotiating* says the opposite of
+    that while being technically true
+  - The pipeline report carries a **median first response** beside a count of the enquiries that
+    got none: a fast median over the answered half of an inbox says nothing about the other half
+  - **When it happened is not when it was typed**, an internal note is not contact, and an
+    unanswered call is a fact worth keeping
+  - **Nothing is sent and nothing is deleted**: amendments say they happened, voided entries stay
+    visible and count towards nothing. `external_ref` is where a provider lands
+- ☐ **Needs the client:** which email/WhatsApp provider, if the log is ever to become a sender
 
 ## Stage 6 — Public Website  ☐
 - Packages · Destinations · Accommodation · Activities · SEO · Lead capture · Custom safari builder

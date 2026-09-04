@@ -10,6 +10,7 @@ from app.modules.activities.router import router as activities_router
 from app.modules.auth.router import router as auth_router
 from app.modules.bookings.router import router as bookings_router
 from app.modules.clients.router import router as clients_router
+from app.modules.comms.router import router as comms_router
 from app.modules.currency.router import router as currency_router
 from app.modules.destinations.router import router as destinations_router
 from app.modules.documents.router import router as documents_router
@@ -54,3 +55,6 @@ api_router.include_router(leads_router)
 api_router.include_router(quotes_router)
 api_router.include_router(documents_router)
 api_router.include_router(bookings_router)
+# Last, deliberately: its /{subject}/{subject_id}/communications paths are
+# generic by design, and every concrete route must win where both could match.
+api_router.include_router(comms_router)
