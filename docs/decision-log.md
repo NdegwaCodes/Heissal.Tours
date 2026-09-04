@@ -1172,3 +1172,58 @@ has a shape to describe: a journey, an excursion, or more than one property. A f
 would otherwise produce "Diani, full board" four times over, and a proposal that pads is one a
 client stops trusting on the figures too. The days stay frozen on the version either way, so a
 later itinerary view can render them all.
+
+**Road distances are hand-entered, not derived** (Stage 4.2, 2026-09-04, client-confirmed)
+The catalogue has held latitude and longitude since Stage 1 and they cannot answer the question
+the quote engine needs: Nairobi to the Maasai Mara is about 225 km straight and about 270 km
+driven, and the drive time depends on the surface far more than on either figure. A routing API
+would give the distance and still not know that the last 40 km wants a 4x4 after rain. The
+client's operations team drives these roads, and confirmed they will state the vehicle
+requirement per route — so `routes` holds the driven kilometres, the timed drive, the vehicle
+types the road takes, and a free-text note, effective-dated because the seasonal fact is exactly
+the one worth dating: the same road is a saloon drive in January and a 4x4 drive in April.
+
+Directional and read either way round. Distance is symmetric and time roughly is, so a lookup
+falls back to the reverse row **and says it did** on the worksheet; where a return genuinely
+differs the operator enters the second row and it wins for that direction. Refusing to read a
+row backwards would make every itinerary need its return typed twice, which is how a table stops
+being kept up to date.
+
+**The drive on our own vehicle was free** (Stage 4.2, 2026-09-04)
+The hole §3.10 left. A hired transfer is priced from a tariff; a movement on our **own** vehicle
+hit `if segment.vehicle_id is not None: continue`, on the reasoning that the Stage 2.8 fleet
+model would cost it — and the Stage 2 model is not in the Stage 3 build-up at all. So an option
+whose group is driven to the Mara in the company Land Cruiser carried the beds, the park fees and
+**nothing** for the eight-hour drive: 11,075 missing from a quote whose accommodation was 60,000,
+on the invented figures the tests use.
+
+Now costed from the route: distance from the table, litres from the vehicle's consumption, price
+from the pump-price table on the day it drives, plus a day of driver and running costs. Two lines
+in two currencies, because fuel is bought where the pump price is recorded and the crew is paid in
+the vehicle's own — converted once each, so no rate touches a figure that did not need one. The
+arithmetic is `compute_transport_cost`, unchanged since Stage 2.8: litres times price is not
+something to implement twice.
+
+**A movement costs one day of its crew.** Not a fraction derived from the drive time — a
+ten-hour drive to the Mara and a two-hour transfer both take the day, and neither leaves it free
+for another job. A multi-day drive is entered as the movements it actually is, which is also how
+the itinerary reads it.
+
+**A vehicle the road does not take is blocking** (Stage 4.2, 2026-09-04)
+The reason the column exists, and it is two failures at once: the quote is under-priced, because
+the vehicle the trip needs costs more than the one it was costed on, and the drive cannot be run
+as sold. A saloon and a Land Cruiser look identical on a proposal, and the second failure is
+discovered on the road. The route's own note travels with the refusal — "impassable after heavy
+rain" is why the requirement exists, and an agent reading only "takes a Land Cruiser" reads a
+preference.
+
+Silence is not compliance: a movement naming no vehicle at all fails a stated requirement rather
+than passing it, because the alternative sends nothing up a road that needs a Cruiser and calls
+it fine.
+
+**The tariff tables got an API** (Stage 4.2, 2026-09-04)
+Readiness has told operators to "load the fare before issuing" since §3.10, and until now the
+only way to load one was to edit a seed script. A blocking message whose fix needs a developer is
+not a fix. `POST /destinations/{id}/transfer-rates` and `.../transport-modes` close it; the
+latter refuses `air` with the licence reason rather than a list of permitted values, because an
+operator who reads "must be one of road, rail" will assume air is coming.

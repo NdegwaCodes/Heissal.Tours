@@ -70,6 +70,12 @@ class Movement:
     label: str
     on: date | None = None
     is_optional: bool = False
+    #: How long the drive takes, from the route table (§4.2). ``None`` where
+    #: there is no route row — a rail leg, a hired transfer priced off a
+    #: tariff — and the day-by-day then names the movement without a time
+    #: rather than estimating one. "About five hours" is a promise a client
+    #: plans a day around; it is not ours to invent.
+    duration_minutes: int | None = None
 
 
 @dataclass(frozen=True)

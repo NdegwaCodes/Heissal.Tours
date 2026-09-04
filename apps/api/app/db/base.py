@@ -58,6 +58,7 @@ from app.modules.supplier_docs.models import (  # noqa: F401
 from app.modules.suppliers.models import Supplier  # noqa: F401
 from app.modules.transport.models import (  # noqa: F401
     DestinationTransportMode,
+    Route,
     TransferRate,
 )
 from app.modules.users.models import User  # noqa: F401
@@ -103,6 +104,7 @@ __all__ = [
     "SupplierDocument",
     "SupplierDocumentExtraction",
     "DestinationTransportMode",
+    "Route",
     "TransferRate",
     "PropertyImage",
     "DestinationImage",

@@ -25,6 +25,7 @@ is the one being proposed; every option's figures are kept alongside in
 from __future__ import annotations
 
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
@@ -62,6 +63,7 @@ from app.modules.quotes.option_pricing import (
 from app.modules.quotes.options import needs_chef
 from app.modules.quotes.packages import Leg
 from app.modules.quotes.packages import check as check_package
+from app.modules.quotes.routing import Road
 from app.modules.quotes.schemas import (
     QuoteOptionIn,
     QuoteOptionUpdate,
@@ -483,6 +485,18 @@ class QuoteAssemblyService:
                     found.message,
                 )
             )
+        # What the route table found (§4.2): a road with no row, a vehicle the
+        # road does not take, a missing pump price. Every one of them is
+        # blocking and every one is invisible on a finished document — a saloon
+        # and a Land Cruiser look identical on a proposal.
+        for found in priced.transport.problems:
+            out.append(
+                Problem(
+                    BLOCKING if found.blocking else ADVISORY,
+                    found.code,
+                    found.message,
+                )
+            )
         for movement in priced.transport.unpriced:
             out.append(
                 Problem(
@@ -497,7 +511,9 @@ class QuoteAssemblyService:
         return out
 
     @staticmethod
-    def _movements(quote: Quote) -> list[Movement]:
+    def _movements(
+        quote: Quote, roads: Mapping[int, Road] | None = None
+    ) -> list[Movement]:
         """The journey as the programme sees it (Stage 4.1).
 
         Built from the segment rows rather than from the priced charges,
@@ -514,6 +530,11 @@ class QuoteAssemblyService:
                 label=segment.description or f"{segment.mode.upper()} {segment.kind}",
                 on=segment.travel_date,
                 is_optional=segment.is_optional,
+                duration_minutes=(
+                    road.drive_time_minutes
+                    if (road := (roads or {}).get(segment.sequence)) is not None
+                    else None
+                ),
             )
             for segment in sorted(
                 quote.transport_segments, key=lambda one: one.sequence
@@ -788,7 +809,9 @@ def _snapshot(
     order = {o.id: o.sort_order for o in quote.options}
     destinations = destinations or {}
     residences = residences or {}
-    movements = QuoteAssemblyService._movements(quote)
+    # With the drive times the route table found, so the frozen programme can
+    # say how long a day on the road is (§4.2).
+    movements = QuoteAssemblyService._movements(quote, priced.transport.roads)
     return {
         "quote_number": quote.quote_number,
         "currency": quote.presentation_currency.upper(),
@@ -881,7 +904,17 @@ def _snapshot(
                         "board": day.board,
                         "leg": day.leg,
                         "moves_from": day.moves_from,
-                        "movements": [one.label for one in day.movements],
+                        # Label and duration, not a bare string: the
+                        # day-by-day says how long a drive takes where the
+                        # route table knows. Versions frozen before §4.2 hold
+                        # plain strings and the document reads both.
+                        "movements": [
+                            {
+                                "label": one.label,
+                                "minutes": one.duration_minutes,
+                            }
+                            for one in day.movements
+                        ],
                         "excursions": list(day.excursions),
                         "is_arrival": day.is_arrival,
                         "is_departure": day.is_departure,

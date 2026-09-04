@@ -515,7 +515,9 @@ class QuotationViewBuilder:
         """
         out: list[DayView] = []
         for row in frozen:
-            events = [str(one) for one in (row.get("movements") or []) if one]
+            events = [
+                self._movement_phrase(one) for one in (row.get("movements") or []) if one
+            ]
             events.extend(str(one) for one in (row.get("excursions") or []) if one)
             board = str(row.get("board") or "")
             phrase = (
@@ -544,6 +546,40 @@ class QuotationViewBuilder:
                 )
             )
         return out
+
+    @classmethod
+    def _movement_phrase(cls, movement: Any) -> str:
+        """"Diani to the Mara — about 4 h 30", where the route table knows.
+
+        Versions frozen before §4.2 hold a plain label and get one, which is
+        the whole reason this reads both shapes: an issued document must keep
+        rendering as it was issued.
+        """
+        if not isinstance(movement, dict):
+            return str(movement)
+        label = str(movement.get("label") or "")
+        phrase = cls._drive_phrase(movement.get("minutes"))
+        return f"{label} — {phrase}" if label and phrase else label
+
+    @staticmethod
+    def _drive_phrase(minutes: Any) -> str:
+        """"about 45 min", "about 4 h 30" — hedged, because a road is a road.
+
+        Always "about". The figure is the operator's own timing of a Kenyan
+        road, and printing it flat invites a client to hold a proposal to a
+        four-hour-thirty-two arrival on a route where a lorry on the escarpment
+        costs an hour.
+        """
+        try:
+            total = int(minutes)
+        except (TypeError, ValueError):
+            return ""
+        if total <= 0:
+            return ""
+        if total < 90:
+            return f"about {total} min"
+        hours, rest = divmod(total, 60)
+        return f"about {hours} h" if not rest else f"about {hours} h {rest:02d}"
 
     @staticmethod
     def _day_date(iso: str) -> str:

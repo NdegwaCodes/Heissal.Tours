@@ -622,6 +622,15 @@ class QuoteTransportSegment(UUIDPKMixin, TimestampMixin, Base):
     destination_id: Mapped[uuid.UUID | None] = mapped_column(
         PGUUID(as_uuid=True), ForeignKey("destinations.id", ondelete="RESTRICT"), nullable=True
     )
+    # Where the movement STARTS (§4.2). A segment has always named the
+    # destination it serves, which is enough to find a tariff — those are keyed
+    # on the destination — but a route is a pair, and the far end cannot be
+    # guessed from the legs: transport is priced once for the quote while every
+    # option has its own leg sequence. NULL for rail and air, and for a road
+    # transfer priced from a tariff rather than driven on our own fuel.
+    origin_id: Mapped[uuid.UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("destinations.id", ondelete="RESTRICT"), nullable=True
+    )
     # Set for road segments run on our own or hired fleet.
     vehicle_id: Mapped[uuid.UUID | None] = mapped_column(
         PGUUID(as_uuid=True), ForeignKey("vehicles.id", ondelete="RESTRICT"), nullable=True

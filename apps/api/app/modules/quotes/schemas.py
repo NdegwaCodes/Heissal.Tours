@@ -104,6 +104,11 @@ class TransportSegmentIn(BaseModel):
     mode: str = Field(max_length=10)
     travel_class: str = Field(default="", max_length=20)
     destination_id: uuid.UUID | None = None
+    # Where the drive starts (§4.2). Needed only for a movement on our own
+    # vehicle, which is costed from the route table — a route is a pair, and
+    # the far end cannot be inferred from an option's legs when transport is
+    # priced once for the whole quote.
+    origin_id: uuid.UUID | None = None
     # Set for a movement run on our own or a hired vehicle, which is costed by
     # the fleet model rather than from a transfer tariff.
     vehicle_id: uuid.UUID | None = None
@@ -126,6 +131,7 @@ class TransportSegmentRead(BaseModel):
     mode: str
     travel_class: str
     destination_id: uuid.UUID | None
+    origin_id: uuid.UUID | None
     vehicle_id: uuid.UUID | None
     vehicle_type: str | None
     units: int
@@ -548,6 +554,10 @@ class TransportChargeInternal(BaseModel):
     cost: Decimal
     is_optional: bool
     is_vvip: bool
+    #: The row behind it — the tariff, or the route and the vehicle for a drive
+    #: on our own fleet (§4.2). Internal by definition: it is what an operator
+    #: reconciles a fuel invoice against, and it names our own tables.
+    source: str = ""
 
 
 class PricedLegRead(BaseModel):

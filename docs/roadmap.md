@@ -279,10 +279,21 @@ the group total derived from it so the two always reconcile.
     the trip is now blocking and refused at creation — see the decision log
   - An undated movement appears on no day and is reported instead. Placing it on the arrival day
     (where it prices) put a rail return's six movements all on day one
-- ☐ Route data · distance/time calculation · fuel calculation — needs road distances between
-  destinations, which the catalogue does not hold: `destinations` has lat/long only, and a
-  great-circle line is not a Kenyan road. Stage 2.8's engine still costs fuel off an
-  agent-entered `estimated_km`
+- ☑ 4.2 **Route data, and the drive that used to be free** (`routes`, migration `9ed0fe038498`,
+  `app/modules/quotes/routing.py`, 27 tests) — the driven kilometres, the timed drive and the
+  vehicle types a road takes, hand-entered by the people who drive them (client-confirmed
+  2026-09-04). Coordinates cannot answer it and a routing API would not know about the murram
+  - **The hole §3.10 left:** a movement on our own vehicle was skipped by option pricing, so a
+    company Land Cruiser to the Mara was charged at nothing. Now costed from the route —
+    distance, litres, pump price, and a day of driver and running — through Stage 2.8's own
+    `compute_transport_cost`
+  - **A vehicle the road does not take blocks the issue.** Under-priced *and* undeliverable, and
+    invisible on a proposal; the route's note travels with the refusal
+  - A route is read in either direction and says when it was read in reverse; `origin_id` on a
+    segment is asked for rather than inferred, because transport is priced once per quote
+  - Drive time reaches the day-by-day as "about 5 h 30" — hedged, because it is a Kenyan road
+  - The **transfer and line-haul tariff tables got an API** at last: readiness has said "load the
+    fare" since §3.10 with no endpoint to load it through
 - ☐ Route sequencing · itinerary scoring · AI-generated narrative
 
 ## Stage 5 — CRM  ☐

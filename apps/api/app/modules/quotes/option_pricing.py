@@ -45,6 +45,7 @@ from app.modules.activities.models import Activity, ActivityRate
 from app.modules.currency.fx import AdminExchangeRateProvider
 from app.modules.park_fees.models import ParkFee
 from app.modules.pricing.service import PricingConfigService
+from app.modules.quotes import routing
 from app.modules.quotes import transport as transport_rules
 from app.modules.quotes.cohorts import (
     CostLine,
@@ -76,8 +77,12 @@ from app.modules.quotes.options import (
     supplement_cost,
     supplier_paid,
 )
-from app.modules.quotes.packages import Leg, nights_of
+from app.modules.quotes.packages import Leg, Problem, nights_of
+from app.modules.quotes.routing import Road
 from app.modules.transport.models import DestinationTransportMode, TransferRate
+from app.modules.transport.service import RouteService
+from app.modules.vehicles.models import Vehicle
+from app.modules.vehicles.service import FuelPriceService, compute_transport_cost
 
 # --------------------------------------------------------------------------- #
 # Results
@@ -191,6 +196,14 @@ class TransportCosting:
     #: What the add-ons sell for: ``optional_total`` through the same build-up
     #: as the package, because an add-on offered at cost is sold at a loss.
     optional_price: Decimal = Decimal(0)
+    #: The drives run on our own vehicles (§4.2), by segment sequence: the
+    #: road, and what the fuel and the crew cost on it. Held so the day-by-day
+    #: can say how long the drive is and the worksheet can show the litres.
+    roads: dict[int, Road] = field(default_factory=dict)
+    #: Faults the route table found — a road with no row, a vehicle the road
+    #: does not take. Graded at readiness rather than raised here, because a
+    #: half-priced quote is still worth showing an agent.
+    problems: list[Problem] = field(default_factory=list)
 
 
 @dataclass
@@ -2003,13 +2016,26 @@ class OptionPricingService:
                 # only not to put a number against it.
                 out.unpriced.append(label)
                 continue
-            # A segment run on our own or a hired vehicle is costed by the
-            # Stage 2 fleet model (km, fuel, driver) off ``quote_transport``,
-            # not from a transfer tariff, so it is not charged twice here.
+            on = segment.travel_date or quote.arrival_date
+            # A movement run on our OWN vehicle is not a tariff at all: it is
+            # kilometres, fuel and a crew (§4.2). Before the route table this
+            # branch simply skipped such a segment, on the reasoning that the
+            # Stage 2 fleet model would cost it — and the Stage 2 model is not
+            # in the Stage 3 build-up, so an eight-hour drive to the Mara was
+            # charged at nothing at all.
             if segment.vehicle_id is not None:
+                await self._drive(
+                    quote,
+                    segment,
+                    label=label,
+                    on=on,
+                    group=group,
+                    into=out,
+                    per_currency=per_currency,
+                    optional_currency=optional_currency,
+                )
                 continue
 
-            on = segment.travel_date or quote.arrival_date
             if not (quote.arrival_date <= on <= quote.departure_date):
                 out.warnings.append(
                     f"{label} travels on {on}, which is outside the quote's "
@@ -2107,13 +2133,22 @@ class OptionPricingService:
                 # The multiplier that was actually applied — tickets for a
                 # per-person fare, vehicles or legs for a group one — derived
                 # the same way the charge was, not re-guessed from the total.
-                quantity=multiplier(
-                    charge.basis,
-                    pax=group.pax,
-                    nights=0,
-                    days=0,
-                    rooms=0,
-                    units=charge.units,
+                #
+                # A drive on our own vehicle is the exception: it is priced
+                # from kilometres rather than from a group basis (§4.2), so its
+                # figure is already the whole drive and the quantity is the
+                # number of vehicles that drove it.
+                quantity=(
+                    charge.units
+                    if charge.sequence in out.roads
+                    else multiplier(
+                        charge.basis,
+                        pax=group.pax,
+                        nights=0,
+                        days=0,
+                        rooms=0,
+                        units=charge.units,
+                    )
                 ),
                 currency=charge.currency,
                 extended=charge.cost,
@@ -2122,6 +2157,172 @@ class OptionPricingService:
             for charge in out.charges + out.optional
         ]
         return out
+
+    async def _drive(
+        self,
+        quote: Quote,
+        segment: QuoteTransportSegment,
+        *,
+        label: str,
+        on: date,
+        group: Group,
+        into: TransportCosting,
+        per_currency: dict[str, Decimal],
+        optional_currency: dict[str, Decimal],
+    ) -> None:
+        """Cost one drive on our own vehicle: distance, fuel, driver, running (§4.2).
+
+        The distance comes from the route table because nothing else can give
+        it: coordinates answer the wrong question (a straight line), and a
+        figure typed per quote is a figure that differs between two quotes for
+        the same road. The arithmetic is
+        :func:`app.modules.vehicles.service.compute_transport_cost`, unchanged
+        since Stage 2.8 and already tested — litres times pump price is not
+        something to implement twice.
+
+        Two currencies on purpose. Fuel is bought in the currency the pump
+        price is recorded in and the crew is paid in the vehicle's own, and
+        they are not always the same; each is accumulated where it belongs and
+        converted once, so no rate is applied to a figure that did not need it.
+
+        What it will not do is guess. No route on file, no fuel price, a road
+        the vehicle cannot take — each is recorded as a fault and the movement
+        is left unpriced, for the §3.10 reason: a zero on a document reads as a
+        leg the client is not being charged for.
+        """
+        vehicle = await self.db.get(Vehicle, segment.vehicle_id)
+        if vehicle is None:
+            raise NotFoundError(
+                "A transport segment references a vehicle that no longer exists."
+            )
+
+        if segment.origin_id is None or segment.destination_id is None:
+            gap = routing.check_endpoints(
+                label=label,
+                has_origin=segment.origin_id is not None,
+                has_destination=segment.destination_id is not None,
+                sequence=segment.sequence,
+            )
+            # Never None on this branch — one of the two ends is missing — but
+            # the checker returns the same optional shape as its siblings so a
+            # caller can ask it about a movement that turns out to be fine.
+            if gap is not None:
+                into.problems.append(gap)
+            into.unpriced.append(label)
+            return
+
+        road = await RouteService(self.db).find(
+            origin_id=segment.origin_id,
+            destination_id=segment.destination_id,
+            on=on,
+        )
+        if road is None:
+            into.problems.append(
+                routing.missing_route(label=label, sequence=segment.sequence, on=on)
+            )
+            into.unpriced.append(label)
+            return
+
+        # The road's own requirement, against the vehicle actually assigned.
+        # This is the column the client asked for: they state which roads need
+        # a 4x4, and a saloon quoted up one of them is both under-priced and a
+        # drive that does not happen.
+        fault = routing.check_vehicle(
+            label=label,
+            road=road,
+            offered=vehicle.vehicle_type,
+            sequence=segment.sequence,
+        )
+        if fault is not None:
+            into.problems.append(fault)
+
+        try:
+            fuel = await FuelPriceService(self.db).select_price(
+                fuel_type=vehicle.fuel_type, on_date=on
+            )
+        except (AppError, NotFoundError):
+            into.problems.append(
+                routing.missing_fuel_price(
+                    label=label,
+                    fuel_type=vehicle.fuel_type,
+                    sequence=segment.sequence,
+                )
+            )
+            into.unpriced.append(label)
+            return
+
+        # ``units`` is how many vehicles the movement takes — one coach or
+        # three Land Cruisers — so the whole drive multiplies by it.
+        vehicles = max(1, segment.units)
+        calc = compute_transport_cost(
+            distance_km=road.distance_km,
+            consumption_kmpl=vehicle.fuel_consumption_kmpl,
+            fuel_price_per_litre=fuel.price_per_litre,
+            days=routing.DAYS_PER_MOVEMENT,
+            driver_cost_per_day=vehicle.driver_cost_per_day,
+            daily_operating_cost=vehicle.daily_operating_cost,
+        )
+        fuel_currency = fuel.currency.upper()
+        crew_currency = vehicle.currency.upper()
+        fuel_cost = calc["fuel_cost"] * vehicles
+        crew_cost = (calc["driver_total"] + calc["operating_total"]) * vehicles
+
+        into.roads[segment.sequence] = road
+        bucket = optional_currency if segment.is_optional else per_currency
+        target = into.optional if segment.is_optional else into.charges
+        for currency, amount, what, unit, basis in (
+            (
+                fuel_currency,
+                fuel_cost,
+                f"{label} — fuel, {routing.plain(road.distance_km)} km at "
+                f"{routing.plain(vehicle.fuel_consumption_kmpl)} km/L",
+                fuel.price_per_litre,
+                "per_vehicle",
+            ),
+            (
+                crew_currency,
+                crew_cost,
+                f"{label} — driver and running, {routing.plain(road.hours)} h",
+                vehicle.driver_cost_per_day + vehicle.daily_operating_cost,
+                "per_vehicle",
+            ),
+        ):
+            if amount == 0:
+                continue
+            bucket[currency] = bucket.get(currency, Decimal(0)) + amount
+            target.append(
+                TransportCharge(
+                    sequence=segment.sequence,
+                    kind=segment.kind,
+                    mode=segment.mode,
+                    label=what,
+                    basis=basis,
+                    units=vehicles,
+                    unit_amount=unit,
+                    currency=currency,
+                    cost=amount,
+                    is_optional=segment.is_optional,
+                    is_vvip=segment.is_vvip,
+                    source=(
+                        f"{road.source} · vehicles {vehicle.id} "
+                        f"({vehicle.vehicle_type})"
+                        + (
+                            f" · fuel_prices {fuel.id}"
+                            if basis == "per_vehicle" and currency == fuel_currency
+                            else ""
+                        )
+                    ),
+                )
+            )
+            if not segment.is_optional:
+                into.lines.append(
+                    CostLine(
+                        label="transport",
+                        amount=amount,
+                        currency=currency,
+                        basis="per_group",
+                    )
+                )
 
     async def _tariff_for(
         self, segment: QuoteTransportSegment, *, on: date

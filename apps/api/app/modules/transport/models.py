@@ -27,6 +27,7 @@ from decimal import Decimal
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     Date,
     ForeignKey,
     Integer,
@@ -35,6 +36,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -126,3 +128,82 @@ class TransferRate(UUIDPKMixin, TimestampMixin, Base):
     effective_to: Mapped[date | None] = mapped_column(Date, index=True, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class Route(UUIDPKMixin, TimestampMixin, Base):
+    """A road route between two destinations, as the operator knows it (§4.2).
+
+    **Hand-entered, deliberately.** The catalogue holds latitude and longitude,
+    and the temptation is to derive distance from them — but a great-circle
+    line is not a Kenyan road: Nairobi to the Mara is about 225 km straight and
+    about 270 km driven, and the drive time depends far more on the surface
+    than on either figure. A routing API would answer the distance and still
+    not know that the last 40 km wants a 4×4 in April. The client's operations
+    team drives these roads; this is where what they know is recorded.
+
+    ``required_vehicle_types`` is the point of the table as much as the
+    distance. A route the client states needs a Land Cruiser, quoted on a
+    saloon, is both a mis-price (the vehicle costs more) and a trip that does
+    not happen — so it blocks at readiness rather than being noticed on the
+    road.
+
+    Directional, and read either way round. Distance is symmetric and time
+    roughly is, so a lookup falls back to the reverse row and says it did
+    (§4.2); where the return genuinely differs — a one-way road, a ferry
+    queue that only bites southbound — the operator enters the second row and
+    it wins for that direction.
+
+    Effective-dated like every other reference row here, because the seasonal
+    fact is exactly the one worth dating: the same route is a saloon drive in
+    January and a 4×4 drive in April.
+    """
+
+    __tablename__ = "routes"
+    __table_args__ = (
+        UniqueConstraint(
+            "origin_id",
+            "destination_id",
+            "effective_from",
+            name="uq_route_period",
+        ),
+        CheckConstraint("distance_km > 0", name="ck_route_distance_positive"),
+        CheckConstraint(
+            "drive_time_minutes > 0", name="ck_route_drive_time_positive"
+        ),
+        CheckConstraint("origin_id <> destination_id", name="ck_route_endpoints_differ"),
+    )
+
+    origin_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("destinations.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+    destination_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("destinations.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+    #: What a client reads on the itinerary — "Diani to the Maasai Mara".
+    label: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    #: Road kilometres, one way. Numeric rather than integer because a short
+    #: transfer leg is measured in tenths and fuel is charged on it.
+    distance_km: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    #: Driving time in minutes, as the operator times it rather than as an
+    #: average speed implies. Minutes so "4h 45" needs no rounding.
+    drive_time_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
+    #: The vehicle types this road actually takes, as ``Vehicle.vehicle_type``
+    #: values. Empty means any: most tarmac routes do not care. Stated by the
+    #: client per route, which is why it is a list of their own vocabulary
+    #: rather than a derived "is it 4×4" flag.
+    required_vehicle_types: Mapped[list[str]] = mapped_column(
+        JSONB, default=list, nullable=False
+    )
+    #: Free text for the fact that does not fit a column — "impassable after
+    #: heavy rain", "ferry queue adds an hour on Fridays". Printed on the
+    #: internal worksheet, never on the client's page.
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    effective_from: Mapped[date] = mapped_column(Date, index=True, nullable=False)
+    effective_to: Mapped[date | None] = mapped_column(Date, index=True, nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)

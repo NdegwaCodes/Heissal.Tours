@@ -385,9 +385,15 @@ async def test_a_dated_transfer_lands_on_its_own_day(
             },
         ],
     )
-    assert days[0]["movements"] == ["Airport to hotel"]
+    # Label and duration since §4.2: the day-by-day says how long a drive takes
+    # where the route table knows, and these transfers have no route row.
+    assert days[0]["movements"] == [
+        {"label": "Airport to hotel", "minutes": None}
+    ]
     assert days[1]["movements"] == []
-    assert days[-1]["movements"] == ["Hotel to airport"]
+    assert days[-1]["movements"] == [
+        {"label": "Hotel to airport", "minutes": None}
+    ]
 
 
 async def test_the_day_they_change_hotels_says_so(

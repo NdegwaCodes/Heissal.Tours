@@ -203,6 +203,7 @@ class QuoteService:
                     mode=seg.mode,
                     travel_class=seg.travel_class,
                     destination_id=seg.destination_id,
+                    origin_id=seg.origin_id,
                     vehicle_id=seg.vehicle_id,
                     vehicle_type=seg.vehicle_type,
                     units=seg.units,
