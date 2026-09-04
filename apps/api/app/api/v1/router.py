@@ -18,6 +18,7 @@ from app.modules.leads.router import router as leads_router
 from app.modules.media.router import router as media_router
 from app.modules.narratives.router import router as narratives_router
 from app.modules.park_fees.router import router as park_fees_router
+from app.modules.portal.router import router as portal_router
 from app.modules.pricing.router import router as pricing_router
 from app.modules.quotes.router import router as quotes_router
 from app.modules.rbac.router import router as rbac_router
@@ -55,6 +56,7 @@ api_router.include_router(leads_router)
 api_router.include_router(quotes_router)
 api_router.include_router(documents_router)
 api_router.include_router(bookings_router)
+api_router.include_router(portal_router)
 # Last, deliberately: its /{subject}/{subject_id}/communications paths are
 # generic by design, and every concrete route must win where both could match.
 api_router.include_router(comms_router)

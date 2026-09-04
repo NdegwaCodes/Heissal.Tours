@@ -53,6 +53,17 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
     REFRESH_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7
 
+    # --- Client portal (Stage 7.2) ---
+    # Where a client's own trip lives. The base of the link an agent sends;
+    # the access token goes in the URL **fragment**, which browsers never send
+    # to a server, so it stays out of access logs and Referer headers.
+    PORTAL_BASE_URL: str = "http://localhost:3001"
+    # How long after they travel a client can still open their trip. Not
+    # arbitrary and not "until departure": receipts, the statement and the
+    # itinerary are all wanted after the fact, and a link that dies on the day
+    # they fly home is a support call.
+    PORTAL_ACCESS_DAYS_AFTER_TRAVEL: int = 90
+
     # --- First superuser (seed) ---
     FIRST_SUPERUSER_EMAIL: str = "admin@heissal.co.ke"
     FIRST_SUPERUSER_PASSWORD: str = "ChangeMe123!"

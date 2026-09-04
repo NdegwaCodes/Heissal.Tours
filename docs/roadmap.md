@@ -393,7 +393,24 @@ the group total derived from it so the two always reconcile.
   - **No cancellation charge is computed**: that ladder is commercial policy nobody has given us
 - ☐ **Needs the client:** the cancellation/refund ladder (what is retained, how close to travel)
 - ☐ M-Pesa / payment integration — lands behind the `payments` rows, which are the seam
-- ☐ Client login · documents · online itinerary
+- ☑ 7.2 **The client's own trip** (`app/modules/portal/`, migration `0ff0bb66eb7a`, 42 tests) —
+  the itinerary, the statement and the document they accepted, without an account of any kind
+  - **Clients are not users.** No password, no registration, no reset: a `users` row carries
+    permissions into every guard in the system, and somebody who books one trip every other year
+    has forgotten a password by the time they need it
+  - One **grant per booking**: a 256-bit token stored hashed, returned exactly once, revocable
+    with a reason. A leaked link exposes one trip, not a relationship
+  - The token rides in the link's **fragment**, which browsers never send to a server — so it
+    stays out of access logs and Referer headers
+  - **Read-only by construction**: the portal has no write endpoint at all, so there is nothing a
+    grant could authorise
+  - The client view is an **allow-list over the frozen snapshot**, not the snapshot minus cost.
+    The snapshot holds the whole costing, and a filter is one forgotten key away from showing a
+    client their own margin
+  - Everything comes from the **version they accepted** — the document is pinned to the booking's
+    `quote_version_id`, so re-issuing the quote cannot change what they re-open in March
+  - A dead link says **which kind of dead**: expired, withdrawn, or a cancelled booking
+- ☐ `apps/portal` itself — the API is built and enforced; the pages are not
 
 ## Stage 8 — Operations  ☐
 - Vehicles · Drivers · Guides · Trip assignments · GPS integration · Fuel/mileage · Supplier management

@@ -1587,3 +1587,97 @@ silence means no. Both silence thresholds (attempts, days) are the caller's, bot
 and the message says in as many words that whether it is a no is a judgement about this client
 rather than something a report can make. Two chases in two days is a keen agent; two over three
 weeks is a client who has booked elsewhere, and no default can tell them apart.
+
+**Clients are not users** (Stage 7.2, 2026-09-04)
+§7.1 gave an accepted quote somewhere to go. Stage 7.2 is the client's own view of it — the
+itinerary, the statement, the document they agreed to — and the first decision is what a client
+logs in with. The answer is **nothing**.
+
+A `users` row carries roles and permissions into every guard in the system, and a client belongs
+on the other side of that boundary; putting them in the same table means every future permission
+check has to remember which kind of row it is looking at. And practically: somebody books one trip
+every year or two, so a password is a thing they will have forgotten by the time they need it. The
+login-support cost is real and what it protects is one itinerary. So access is a **grant**:
+`booking_access_grants`, one high-entropy token per booking, which an agent sends by hand (nothing
+sends anything — §5.3).
+
+**The token is stored hashed and returned exactly once.** A table of live links is a table of
+credentials, so the row holds SHA-256 of a 256-bit token and there is no endpoint that can give
+the plaintext back. An agent who needs to resend issues a new grant — one click, and separately
+revocable, which is what you actually want once the first one has been forwarded into a family
+group chat. SHA-256 rather than bcrypt on purpose: a work factor exists to make guessing a
+*low*-entropy secret expensive, there is nothing here to slow down, bcrypt would truncate at 72
+bytes, and the value has to be looked up by equality. For the same reason there is no
+brute-force lockout: 256 bits needs none, and a lockout on an unauthenticated endpoint keyed on a
+token is a way for a stranger to lock a client out of their own itinerary.
+
+**The token travels in the link's fragment** (`…/trip#<token>`), because a browser never sends a
+fragment to a server: not in an access log, not in a Referer header when the client clicks through
+from their itinerary to an airline's site. The portal app lifts it out and sends it as a bearer
+token — the same transport as a staff login, so there is one convention and no token in a path or
+a query string.
+
+**A grant is scoped to one booking, not to a client**, so a leaked link exposes one trip rather
+than a relationship. A booking can carry several (the person paying and the person travelling),
+and revoking one leaves the others working. Revocation requires a reason and keeps it, for §5.3's
+argument about a voided log entry: the next agent has to be able to tell a leak from a mistake.
+
+**Read-only by construction.** There is no write endpoint on the portal at all, so there is
+nothing a grant could be tricked into authorising — the guarantee is the absence of code rather
+than a check somebody has to maintain. A grant is also not a login: it carries no user and no
+permissions, and a test walks it at the staff endpoints to prove it opens none of them.
+
+**The client view is an allow-list, not the snapshot minus cost.** This is the part worth reading
+twice. `quote_versions.snapshot` holds the trip *and* the internal costing —
+`cost_subtotal`, `profit_value`, `supplier_paid_total`, the per-component breakdown. A portal that
+returned the snapshot with a few keys removed would be one forgotten key away from showing a
+client the margin on their own holiday, and the key that gets forgotten is always the one added
+later by somebody working on pricing who has never read the portal module. So nothing is removed:
+named fields are copied across, and a field the snapshot gains tomorrow does not appear until
+somebody adds it deliberately. There is a test that hands in a snapshot carrying invented extra
+cost fields and asserts none of them come out. This is §2's internal/client split carried into §7
+— a boundary that holds because of what the code *cannot* do.
+
+**Everything comes from the frozen version, never a re-price.** Same principle as §7.1 booking
+against the version: the trip, the itinerary and the document are the ones the client accepted,
+and the document is pinned to the booking's own `quote_version_id` rather than the quote's current
+one. A client who re-opens their proposal in March must see what they agreed to in September. The
+money comes off the **booking**, where §7.1 froze it — reading it back off the snapshot here would
+quietly undo that.
+
+**Only the option they booked.** A quote offers three to nine (§3.7); showing a client the two
+they turned down re-opens a decision they have already paid a deposit on. Where a booking has no
+selected option it falls back to the recommended one, which is better than an empty page.
+
+**The statement is the operator's arithmetic, not a second copy.** Straight through to §7.1's
+`position`. Two implementations would eventually disagree, and the client's copy is the one
+sitting in somebody's inbox.
+
+**A dead link says which kind of dead it is.** Expired, withdrawn, or a cancelled booking — three
+different sentences, because "this link no longer works" sends a client to the telephone with
+nothing to say, and a client who has cancelled and is told their link expired will reasonably
+conclude the system has lost their booking. A cancelled booking is reported as cancelled even
+where the link has also lapsed. An *unknown* token gets the same wording as an expired one,
+deliberately: anything else tells a stranger holding a guessed string whether they got close.
+
+**A link outlives the trip.** Default expiry is departure plus a configured margin
+(`PORTAL_ACCESS_DAYS_AFTER_TRAVEL`, 90 days), floored at 30 days from today so that a
+late-recorded booking does not get a link that was dead on arrival. Not departure: the statement,
+the receipts and the itinerary are all wanted afterwards, and a link that dies on the day they fly
+home is a support call rather than a security measure.
+
+**`last_seen_at`/`view_count`, not an access log.** "Did they even open the itinerary?" is a real
+sales question and the cheapest sign a link has ended up somewhere it should not be. A row per
+page view would grow without bound and prove nothing extra — a forwarded link is
+indistinguishable from the client's own browser, so it is not evidence in a dispute either.
+
+**`portal:manage` is its own permission.** Handing somebody outside the business a credential is
+not the same act as editing a booking. There is no read/write pair because there is nothing to
+read: the table holds hashes and a listing never shows a token.
+
+**What is not built:** the portal *application*. `apps/portal` does not exist yet, and this stage
+deliberately builds the API the boundary has to be enforced at rather than a page — business logic
+lives in the backend, and the rule that no cost reaches a client is worth nothing if it lives in a
+React component. When the app is built, the one piece of machinery worth adding is exchanging the
+fragment token for a short-lived session so it is not held in JavaScript for the length of a
+visit.

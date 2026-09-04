@@ -102,6 +102,13 @@ PERMISSIONS: dict[str, str] = {
     # to, how many times they were chased, how fast the enquiry was answered.
     # Recording a call and rewriting the record of one are different acts.
     "comm:amend": "Amend or void a logged conversation",
+    # --- Stage 7.2: the client portal ---
+    # Its own permission, and not folded into booking:manage: issuing a link
+    # hands a credential to somebody outside the business, which is a
+    # different act from editing a booking. There is no read/write pair
+    # because there is nothing to read — the table holds hashes, and a listing
+    # never shows a token.
+    "portal:manage": "Issue and withdraw client links to their own trip",
 }
 
 # Reference read/manage permission keys, grouped for role assignment.
@@ -153,6 +160,8 @@ ROLE_DEFINITIONS: dict[str, RoleDefinition] = {
             # is not theirs: it changes their own response times.
             "comm:read",
             "comm:log",
+            # An agent sends the client their own trip; that is the job.
+            "portal:manage",
             "quote:record_outcome",
             "narrative:read",
             "narrative:manage",
