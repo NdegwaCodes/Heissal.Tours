@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import uuid
+from datetime import date
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,8 +18,11 @@ from app.modules.quotes.option_pricing import (
 )
 from app.modules.quotes.pricing_service import QuotePricingService
 from app.modules.quotes.schemas import (
+    AcceptQuoteIn,
     CalculateRequest,
     CohortPriceRead,
+    ConversionRead,
+    DeclineQuoteIn,
     OptionBuildUpInternal,
     OptionPricingClientResult,
     OptionPricingInternalResult,
@@ -420,3 +424,76 @@ async def select_quote_option(
     quotation are separate events, and the gap between them is worth keeping.
     """
     return await QuoteAssemblyService(db).select_option(quote_id, body.option_id)
+
+
+@router.post("/quotes/{quote_id}/accept", response_model=QuoteRead)
+async def accept_quote(
+    quote_id: uuid.UUID,
+    body: AcceptQuoteIn,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(require_permission("quote:record_outcome")),
+):
+    """Record that the client accepted, and which option they took (§5.1).
+
+    The first thing in this system that can set the status nothing could set.
+    An expired quote is refused with the reason: accepting one would book the
+    trip at rates that have since moved.
+    """
+    return await QuoteAssemblyService(db).record_outcome(
+        quote_id,
+        outcome="accepted",
+        actor_id=actor.id,
+        option_id=body.option_id,
+        note=body.note,
+    )
+
+
+@router.post("/quotes/{quote_id}/decline", response_model=QuoteRead)
+async def decline_quote(
+    quote_id: uuid.UUID,
+    body: DeclineQuoteIn,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(require_permission("quote:record_outcome")),
+):
+    """Record that the client declined, and why if they said why.
+
+    Worth recording even on an expired quote: "they went elsewhere" and "we let
+    it lapse" are different losses, and only the first has a reason attached.
+    """
+    return await QuoteAssemblyService(db).record_outcome(
+        quote_id, outcome="declined", actor_id=actor.id, note=body.note
+    )
+
+
+@router.get("/quotes/analytics/conversion", response_model=ConversionRead)
+async def quote_conversion(
+    since: date | None = Query(
+        default=None, description="Only quotes issued on or after this date."
+    ),
+    until: date | None = Query(
+        default=None, description="Only quotes issued on or before this date."
+    ),
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_permission("quote:read")),
+):
+    """What was sent, won, lost and is still out (§5.1).
+
+    Selling values only, so it needs no cost permission: these are the figures
+    that were in front of clients. Margin lives on the internal version read,
+    behind ``quote:read_cost``.
+
+    Filtered on **when the quote was issued** rather than when it was decided,
+    so a month's win rate does not depend on the previous month's.
+    """
+    report = await QuoteAssemblyService(db).conversion(since=since, until=until)
+    return ConversionRead(
+        counts=report.counts,
+        won=report.won,
+        lost=report.lost,
+        outstanding=report.outstanding,
+        win_rate=report.win_rate,
+        median_days_to_decide=report.median_days_to_decide,
+        recommendation_taken=report.recommendation_taken,
+        recommendation_declined=report.recommendation_declined,
+        recommendation_rate=report.recommendation_rate,
+    )

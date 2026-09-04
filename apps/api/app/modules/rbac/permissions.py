@@ -76,6 +76,11 @@ PERMISSIONS: dict[str, str] = {
     # and sending one are different levels of trust.
     "quote:issue": "Issue a quotation to a client (freezes an immutable version)",
     "quote:approve_discount": "Approve discounts beyond the standard threshold",
+    # Its own permission because it is the act that decides what the business
+    # believes about itself: the win rate, the pipeline value and every report
+    # built on them come from these two endpoints, and a quote marked accepted
+    # by mistake is a booking somebody expects to happen.
+    "quote:record_outcome": "Record that a client accepted or declined a quote",
 }
 
 # Reference read/manage permission keys, grouped for role assignment.

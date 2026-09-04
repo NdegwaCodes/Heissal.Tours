@@ -39,6 +39,7 @@ from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base_class import Base, TimestampMixin, UUIDPKMixin
+from app.modules.quotes.outcomes import effective_status
 
 # Quote lifecycle states. Editable data flows, not a hard-coded price rule.
 QUOTE_STATUSES = ("draft", "sent", "accepted", "declined", "expired")
@@ -129,6 +130,36 @@ class Quote(UUIDPKMixin, TimestampMixin, Base):
     selected_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+
+    # -- Stage 5.1: what happened to it ------------------------------------- #
+    # ``status`` has listed accepted and declined since Stage 2 and nothing
+    # could set them, so no quote in the system had ever been won or lost.
+    # These three record the decision itself: when it was taken, by whom on our
+    # side, and — the one the business will actually read — WHY a loss was a
+    # loss. A funnel that counts losses without reasons tells you that you are
+    # losing and nothing about what to change.
+    decided_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    decided_by: Mapped[uuid.UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    decision_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Kept out of ``status``: "expired" is derived from ``valid_until`` at read
+    # time (see app.modules.quotes.outcomes) because a quote is expired when
+    # somebody looks at it, not when a nightly job last ran.
+
+    @property
+    def effective_status(self) -> str:
+        """``status``, but a sent quote past its validity reads as expired.
+
+        A property with a clock in it, deliberately: the whole reason expiry is
+        derived rather than stored is that it is true the moment somebody looks
+        — so the moment somebody looks is when it is evaluated. Every read path
+        gets the same answer without a scheduler, and a list showing "sent"
+        against a three-month-old proposal cannot happen.
+        """
+        return effective_status(self.status, self.valid_until, today=date.today())
 
     # Points at the latest immutable snapshot (set once pricing runs, Stage 2.8).
     # use_alter breaks the quotes<->quote_versions circular FK at DDL time.

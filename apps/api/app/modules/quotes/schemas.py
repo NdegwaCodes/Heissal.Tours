@@ -359,6 +359,13 @@ class QuoteRead(BaseModel):
     contingency_pct: Decimal | None
     requested_meal_plan_id: uuid.UUID | None
     valid_until: date | None
+    # The status as it reads today (§5.1): a sent quote past its validity is
+    # expired without anything having written that to the row. Exposed beside
+    # the stored one rather than instead of it, because "sent and lapsed" and
+    # "sent and waiting" are the same row and different pipeline entries.
+    effective_status: str
+    decided_at: datetime | None = None
+    decision_note: str | None = None
     # Which option the client actually chose — the CRM's most valuable field (§7).
     selected_option_id: uuid.UUID | None
     selected_at: datetime | None
@@ -711,6 +718,55 @@ class QuoteOptionUpdate(BaseModel):
     manual_meal_cost: Decimal | None = Field(default=None, ge=0)
     is_comparable: bool | None = None
     notes: str | None = None
+
+
+class AcceptQuoteIn(BaseModel):
+    """The client said yes — to which option, and anything worth recording.
+
+    ``option_id`` may be omitted only where one was already chosen through
+    ``/select``: a quote offers several options (§3.7), so an acceptance
+    without one leaves the booking and the revenue figure undecided.
+    """
+
+    option_id: uuid.UUID | None = None
+    note: str | None = Field(default=None, max_length=2000)
+
+
+class DeclineQuoteIn(BaseModel):
+    """The client said no, and why if they said.
+
+    The reason is optional in the schema and asked for in the wording. A funnel
+    that counts losses without reasons says you are losing and nothing about
+    what to change; insisting on one would only produce "n/a".
+    """
+
+    note: str | None = Field(default=None, max_length=2000)
+
+
+class ConversionRead(BaseModel):
+    """The funnel (§5.1).
+
+    Money is **per currency** and never summed across them: a quote is
+    presented in one currency (§3.8), and a single "total won" spanning
+    shillings and dollars is a figure with no meaning — converting them would
+    bake today's rate into a historical report.
+    """
+
+    counts: dict[str, int]
+    won: dict[str, Decimal]
+    lost: dict[str, Decimal]
+    outstanding: dict[str, Decimal]
+    #: Accepted over accepted-plus-declined. Outstanding quotes are excluded:
+    #: one nobody has answered is not a loss.
+    win_rate: Decimal | None = None
+    #: Median, not mean — one quote accepted after eight months would move a
+    #: mean somewhere no quote has ever been.
+    median_days_to_decide: int | None = None
+    recommendation_taken: int = 0
+    recommendation_declined: int = 0
+    #: How often the client took the option we recommended (§3.7). The most
+    #: valuable thing this report says about how we sell.
+    recommendation_rate: Decimal | None = None
 
 
 class RejectedCandidateIn(BaseModel):

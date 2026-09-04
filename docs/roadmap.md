@@ -325,8 +325,22 @@ the group total derived from it so the two always reconcile.
   - ☐ **Still with the client:** whether generated copy should go in front of clients at all, and
     which provider. Nothing generated can reach a document until both are answered
 
-## Stage 5 — CRM  ☐
-- Leads · Pipeline · Follow-ups · Communications · Quote tracking · Conversion analytics
+## Stage 5 — CRM  ◑
+- ☑ 5.1 **Quote outcomes and conversion** (`app/modules/quotes/outcomes.py`, migration
+  `f11242360320`, 30 tests) — `accepted`, `declined` and `expired` had been declared statuses
+  since Stage 2 with **nothing able to set them**, so no quote had ever been won or lost and every
+  conversion figure would have been zero. Two endpoints, three columns (decided when, by whom,
+  and *why* a loss was a loss) and one report
+  - **Expiry is derived**, never stored: a quote is expired when somebody looks at it, not when a
+    job ran. `effective_status` sits beside the stored one on every read
+  - **Accepting is accepting an option** — a quote offers three to nine (§3.7) — and an expired
+    quote cannot be accepted, because rates have moved. Declining one still can be
+  - The funnel keeps money **per currency**, excludes unanswered quotes from the win rate, counts
+    a lapsed quote as outstanding rather than lost, takes a **median** time to decide, and reports
+    `null` rather than zero where nothing has been decided — see the decision log
+  - It answers the question `selected_option_id` has been waiting for since §3.4: **do clients
+    take the option we recommend?**
+- ☐ Leads · pipeline · follow-ups · communications
 
 ## Stage 6 — Public Website  ☐
 - Packages · Destinations · Accommodation · Activities · SEO · Lead capture · Custom safari builder

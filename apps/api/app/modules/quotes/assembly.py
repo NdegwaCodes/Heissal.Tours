@@ -27,7 +27,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 
 from sqlalchemy import func, select
@@ -63,6 +63,15 @@ from app.modules.quotes.option_pricing import (
     OptionPricingService,
 )
 from app.modules.quotes.options import needs_chef
+from app.modules.quotes.outcomes import (
+    ACCEPTED,
+    DRAFT,
+    Conversion,
+    Decided,
+    OutcomeRefused,
+    check_outcome,
+    convert,
+)
 from app.modules.quotes.packages import Leg
 from app.modules.quotes.packages import check as check_package
 from app.modules.quotes.routing import Road
@@ -884,6 +893,123 @@ class QuoteAssemblyService:
         await self.db.commit()
         return await self._load(quote_id)
 
+    async def record_outcome(
+        self,
+        quote_id: uuid.UUID,
+        *,
+        outcome: str,
+        actor_id: uuid.UUID | None,
+        option_id: uuid.UUID | None = None,
+        note: str | None = None,
+        today: date | None = None,
+    ) -> Quote:
+        """Record that the client accepted or declined (§5.1).
+
+        The first thing in this system that can set either. Until now every
+        quote was a draft or was sent, so "how many of our proposals become
+        bookings" had no data — and the pipeline the CRM is built on top of
+        would have reported nothing forever.
+
+        **Accepting is accepting an option.** A quote offers between three and
+        nine of them (§3.7), so "they said yes" without saying yes to what
+        leaves the revenue ambiguous and operations with nothing to book. The
+        option is required here unless one was already chosen through
+        :meth:`select_option` — choosing and accepting stay separate events,
+        because the gap between them is worth measuring.
+
+        **A declined quote asks for a reason, and does not insist.** The note
+        is optional in the schema and requested in the wording: a funnel that
+        counts losses without reasons tells you that you are losing and nothing
+        about what to change. Insisting would only produce "n/a".
+        """
+        quote = await self._load(quote_id)
+        try:
+            check_outcome(
+                quote.status,
+                quote.valid_until,
+                outcome=outcome,
+                today=today or date.today(),
+            )
+        except OutcomeRefused as exc:
+            raise AppError(str(exc)) from exc
+
+        if outcome == ACCEPTED:
+            chosen = option_id or quote.selected_option_id
+            if chosen is None:
+                raise AppError(
+                    "Say which option the client accepted. A quote offers "
+                    "several, so an acceptance without one leaves the booking "
+                    "and the revenue figure undecided."
+                )
+            await self._option(quote, chosen)
+            if quote.selected_option_id != chosen:
+                quote.selected_option_id = chosen
+                quote.selected_at = datetime.now(UTC)
+
+        quote.status = outcome
+        quote.decided_at = datetime.now(UTC)
+        quote.decided_by = actor_id
+        quote.decision_note = note
+        await self.db.commit()
+        return await self._load(quote_id)
+
+    async def conversion(
+        self,
+        *,
+        since: date | None = None,
+        until: date | None = None,
+        today: date | None = None,
+    ) -> Conversion:
+        """The funnel: what was sent, won, lost and is still out (§5.1).
+
+        Read over the quotes' own rows and their current versions, and
+        aggregated by the pure layer — so the headline number the business
+        reads is computed by something with tests that do not need a database.
+
+        Dates filter on **when the quote was issued**, not when it was decided:
+        a report for July is a report about the proposals July sent, and
+        counting a July decision on a May quote against July would make every
+        month's win rate depend on the previous one's.
+        """
+        stmt = (
+            select(Quote, QuoteVersion, QuoteOption)
+            .outerjoin(QuoteVersion, QuoteVersion.id == Quote.current_version_id)
+            .outerjoin(QuoteOption, QuoteOption.id == Quote.selected_option_id)
+            .where(Quote.status != DRAFT)
+        )
+        if since is not None:
+            stmt = stmt.where(Quote.created_at >= _start_of(since))
+        if until is not None:
+            stmt = stmt.where(Quote.created_at < _start_of(until + timedelta(days=1)))
+        rows = list((await self.db.execute(stmt)).all())
+
+        decided: list[Decided] = []
+        for quote, version, option in rows:
+            decided.append(
+                Decided(
+                    status=quote.status,
+                    currency=(
+                        version.currency
+                        if version is not None
+                        else quote.presentation_currency
+                    ),
+                    value=version.selling_price if version is not None else None,
+                    valid_until=quote.valid_until,
+                    # Issue is what set ``valid_until`` and the version, so the
+                    # version's own timestamp is when the quote went out.
+                    issued_on=(
+                        version.created_at.date() if version is not None else None
+                    ),
+                    decided_on=(
+                        quote.decided_at.date() if quote.decided_at else None
+                    ),
+                    took_recommendation=(
+                        bool(option.is_recommended) if option is not None else None
+                    ),
+                )
+            )
+        return convert(decided, today=today or date.today())
+
     # -- helpers ------------------------------------------------------------- #
 
     def _refuse_if_issued(self, quote: Quote) -> None:
@@ -915,6 +1041,17 @@ class QuoteAssemblyService:
         if option is None:
             raise NotFoundError("Option not found on this quote.")
         return option
+
+
+def _start_of(day: date) -> datetime:
+    """Midnight UTC on ``day``, for comparing against a ``TIMESTAMPTZ``.
+
+    Timestamps are stored UTC (the project convention) while a report is asked
+    for in dates, so the boundary is stated once here rather than at each
+    filter — a half-open range built twice is a range that will eventually
+    differ by a day.
+    """
+    return datetime.combine(day, time.min, tzinfo=UTC)
 
 
 # --------------------------------------------------------------------------- #

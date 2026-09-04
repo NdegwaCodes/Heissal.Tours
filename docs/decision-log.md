@@ -1307,3 +1307,53 @@ routine act means resolving the paragraph at render time would have an old propo
 re-describing its hotels. The text now freezes at issue, exactly as the money and the days do, and
 the live lookup remains only for versions issued before §4.4. Superseded rows are kept, which is
 what lets the table answer why last year's description differed.
+
+**No quote could be won or lost** (Stage 5.1, 2026-09-04)
+`QUOTE_STATUSES` has listed `accepted`, `declined` and `expired` since Stage 2 and **nothing could
+set any of them**. Every quote in the system was a draft or was sent, so the CRM's first question
+— how many of the proposals we send become bookings — had no data and would have reported zero
+forever. Same shape as the other reachability gaps this build keeps finding (`is_mandatory`,
+`transport_segments`, the tariff tables): a column that exists with no way to fill it.
+
+**Expiry is derived, never stored.** A quote is expired the moment somebody looks at it past its
+validity date, not when a nightly job last ran. Storing it needs a clock and a scheduler and then
+has two answers whenever the job is late — on the one report the business actually reads. So
+`Quote.effective_status` computes it, every read path gets the same answer, and a list can never
+show "sent" against a three-month-old proposal. `expired` is deliberately absent from the outcomes
+a person can record: a calendar decides it.
+
+**Accepting is accepting an option.** A quote offers three to nine of them (§3.7), so "the client
+said yes" without saying yes to *what* leaves the revenue ambiguous and operations with nothing to
+book. The option is required at acceptance unless one was already chosen through `/select` —
+choosing and accepting stay separate events, because the gap between "they like the second one"
+and "they signed" is worth measuring.
+
+**An expired quote cannot be accepted, and the refusal names the fix.** It is the case where a
+client returns to a six-week-old proposal at rates that have since moved; the honest answer is a
+re-issue at today's prices. Declining an expired quote *is* allowed and worth recording: "they
+went elsewhere" and "we let it lapse" are different losses and only the first has a reason
+attached.
+
+**What the funnel refuses to do.** Value is kept **per currency** — a single "total won" spanning
+shillings and dollars is a figure with no meaning, and converting them would bake today's rate
+into a report about last quarter (§3.8). The win rate excludes outstanding quotes, because one
+nobody has answered is not a loss and counting it as one makes every rate look like a crisis in a
+busy month. A lapsed quote sits in **outstanding rather than lost**: nobody said no, and its
+pipeline value is a follow-up call. Time to decide is a **median**, since one quote accepted after
+eight months would move a mean somewhere no quote has ever been. And "no data" reports as `null`
+rather than zero, because "we have not decided anything yet" and "we lose everything" are
+different facts.
+
+**The report is filtered on when a quote was issued**, not when it was decided: a month's win rate
+must not depend on the previous month's. And it needs no cost permission — selling values only are
+the figures clients were shown, so a sales manager sees the funnel without seeing what things cost
+us.
+
+**`quote:record_outcome` is its own permission.** These two endpoints decide what the business
+believes about itself, and a quote marked accepted by mistake is a booking somebody expects to
+happen.
+
+**The one figure worth building the stage for:** whether clients take the option we recommended.
+`selected_option_id` has been on `quotes` since Stage 3.4 waiting for exactly this, and if the
+number is low then the *Recommended* flag is not describing what clients want — which nothing else
+in the system would ever have said.
