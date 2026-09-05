@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import date
+from decimal import Decimal
 
 from sqlalchemy import (
     Boolean,
@@ -37,12 +38,14 @@ from sqlalchemy import (
     Date,
     ForeignKey,
     Index,
+    Numeric,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base_class import Base, TimestampMixin, UUIDPKMixin
 
@@ -165,3 +168,131 @@ class TripAssignment(UUIDPKMixin, TimestampMixin, Base):
 #: rather than in the pure rules because it is a storage detail: the rules deal
 #: in vehicles and people, not in a discriminator column.
 VEHICLE = "vehicle"
+
+
+class TripLog(UUIDPKMixin, TimestampMixin, Base):
+    """What a vehicle actually did on one trip (§8.2).
+
+    Every quote charges a drive from a distance and a ``fuel_consumption_kmpl``
+    somebody typed onto a ``vehicles`` row once (§2.5). Nothing has ever
+    recorded what the vehicle **did**, so the figure at the centre of every
+    transport line has never been checked against a receipt. This is the row
+    that makes it checkable.
+
+    One log per vehicle assignment, not per booking: a group in two Land
+    Cruisers is two odometers and two sets of receipts, and pooling them would
+    lose exactly the comparison worth making.
+    """
+
+    __tablename__ = "trip_logs"
+    __table_args__ = (
+        # One log per assignment. A second would double the distance in every
+        # fleet average, which is the kind of error that looks like a fact.
+        UniqueConstraint("assignment_id", name="uq_trip_log_assignment"),
+        CheckConstraint(
+            "odometer_in_km is null or odometer_in_km >= odometer_out_km",
+            name="ck_trip_log_odometer",
+        ),
+        CheckConstraint("odometer_out_km >= 0", name="ck_trip_log_out_positive"),
+        # The fleet history query: this vehicle, most recent first.
+        Index("ix_trip_log_vehicle", "vehicle_id", "started_on"),
+    )
+
+    assignment_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("trip_assignments.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    #: Denormalised from the assignment so the fleet history is one query and
+    #: survives the assignment being deleted... which it does not, because the
+    #: cascade takes the log with it. Kept anyway: every question asked of this
+    #: table starts "for this vehicle", and a join to find that out on every
+    #: one of them is a join for nothing.
+    vehicle_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("vehicles.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    booking_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("bookings.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+
+    #: Out and in. ``in`` is nullable because a log is opened when the vehicle
+    #: leaves and closed when it comes back, and the days in between are
+    #: exactly when somebody wants to know where it is.
+    odometer_out_km: Mapped[Decimal] = mapped_column(Numeric(12, 1), nullable=False)
+    odometer_in_km: Mapped[Decimal | None] = mapped_column(
+        Numeric(12, 1), nullable=True
+    )
+    started_on: Mapped[date] = mapped_column(Date, nullable=False)
+    ended_on: Mapped[date | None] = mapped_column(Date, nullable=True)
+
+    #: Who was at the wheel. Nullable and separate from the crew assignment on
+    #: purpose: a driver swap mid-trip happens, and the log should say who
+    #: actually drove rather than who was rostered.
+    driver_id: Mapped[uuid.UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("crew.id", ondelete="SET NULL"), nullable=True
+    )
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    recorded_by: Mapped[uuid.UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+    fills: Mapped[list[FuelFill]] = relationship(
+        "FuelFill",
+        back_populates="log",
+        lazy="selectin",
+        cascade="all, delete-orphan",
+        order_by="FuelFill.bought_on",
+    )
+
+    @property
+    def distance_km(self) -> Decimal | None:
+        if self.odometer_in_km is None:
+            return None
+        return self.odometer_in_km - self.odometer_out_km
+
+    @property
+    def is_open(self) -> bool:
+        return self.odometer_in_km is None
+
+
+class FuelFill(UUIDPKMixin, TimestampMixin, Base):
+    """One fuel receipt against one trip log (§8.2).
+
+    **Litres and money, both from the receipt.** Neither is derived from the
+    other: a litre price computed by division looks like the same information
+    and is not — it loses the partial fill, the price that changed halfway
+    through the trip, and the pump out at Voi that was charging a premium,
+    which is exactly what somebody is looking for when they ask why a trip cost
+    what it did.
+    """
+
+    __tablename__ = "fuel_fills"
+    __table_args__ = (
+        CheckConstraint("litres > 0", name="ck_fuel_fill_litres"),
+        CheckConstraint("amount > 0", name="ck_fuel_fill_amount"),
+        Index("ix_fuel_fill_log", "trip_log_id"),
+    )
+
+    trip_log_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("trip_logs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    litres: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    #: Money is an amount **and** a currency here as everywhere else. A
+    #: cross-border run that fuelled in Tanzania is two lines on the report,
+    #: not one wrong one.
+    amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    bought_on: Mapped[date] = mapped_column(Date, nullable=False)
+    #: Where, and the receipt number. What makes a line checkable against a
+    #: shoebox of paper at the end of the month.
+    station: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    receipt_ref: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    recorded_by: Mapped[uuid.UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+    log: Mapped[TripLog] = relationship("TripLog", back_populates="fills")

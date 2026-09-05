@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.deps import require_permission
 from app.db.session import get_db
 from app.modules.operations.schemas import (
+    ActualRead,
     AssignmentCreate,
     AssignmentMade,
     AssignmentRead,
@@ -19,10 +20,22 @@ from app.modules.operations.schemas import (
     CrewRead,
     CrewUpdate,
     DepartureRead,
+    FindingRead,
+    FleetTruthRead,
+    FuelFillCreate,
+    FuelFillRead,
     GapRead,
     RosterRead,
+    TripLogClose,
+    TripLogOpen,
+    TripLogOpened,
+    TripLogRead,
 )
-from app.modules.operations.service import AssignmentService, CrewService
+from app.modules.operations.service import (
+    AssignmentService,
+    CrewService,
+    TripLogService,
+)
 from app.modules.users.models import User
 
 router = APIRouter(tags=["operations"])
@@ -31,6 +44,10 @@ CREW_READ = "crew:read"
 CREW_MANAGE = "crew:manage"
 ASSIGN_READ = "assignment:read"
 ASSIGN_MANAGE = "assignment:manage"
+#: Its own pair. What a vehicle actually burned is the evidence every future
+#: transport price rests on, and a fuel receipt is money leaving the business.
+LOG_READ = "fleet_log:read"
+LOG_MANAGE = "fleet_log:manage"
 
 
 # --------------------------------------------------------------------------- #
@@ -231,4 +248,188 @@ async def diary(
         ends_on=ends_on,
         vehicle_id=vehicle_id,
         crew_id=crew_id,
+    )
+
+
+# --------------------------------------------------------------------------- #
+# What the vehicle actually did (§8.2)
+# --------------------------------------------------------------------------- #
+
+
+@router.post(
+    "/assignments/{assignment_id}/log",
+    response_model=TripLogOpened,
+    status_code=201,
+)
+async def open_log(
+    assignment_id: uuid.UUID,
+    body: TripLogOpen,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(require_permission(LOG_MANAGE)),
+):
+    """Record a vehicle leaving the yard.
+
+    Opened and closed rather than written in one go: the vehicle leaves on
+    Monday and comes back on Friday, and the days in between are exactly when
+    somebody wants to know where it is.
+
+    Any kilometres between this reading and the vehicle's last return come back
+    as an observation. That gap is not an error — repositioning, a service run
+    — but it is the one thing an odometer is uniquely good at seeing, and a
+    response that said only "created" would bury it.
+    """
+    log, observations = await TripLogService(db).open(
+        assignment_id, actor_id=actor.id, **body.model_dump(exclude_unset=True)
+    )
+    return TripLogOpened(
+        log=_log(log), observations=observations
+    )
+
+
+@router.post("/trip-logs/{log_id}/close", response_model=TripLogRead)
+async def close_log(
+    log_id: uuid.UUID,
+    body: TripLogClose,
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_permission(LOG_MANAGE)),
+):
+    """Record a vehicle coming back.
+
+    A closing reading below the opening one is refused rather than stored: an
+    odometer does not run backwards, so it is a typed digit — and a negative
+    distance in a fleet average poisons every figure derived from it.
+    """
+    return _log(
+        await TripLogService(db).close(
+            log_id,
+            odometer_in_km=body.odometer_in_km,
+            ended_on=body.ended_on,
+        )
+    )
+
+
+@router.post(
+    "/trip-logs/{log_id}/fuel", response_model=FuelFillRead, status_code=201
+)
+async def add_fuel(
+    log_id: uuid.UUID,
+    body: FuelFillCreate,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(require_permission(LOG_MANAGE)),
+):
+    """Record a fuel receipt against a trip.
+
+    Litres and money, both off the paper, because neither can be recovered
+    from the other once it is gone.
+    """
+    return await TripLogService(db).fill(
+        log_id, actor_id=actor.id, **body.model_dump(exclude_unset=True)
+    )
+
+
+@router.get("/trip-logs/{log_id}/actual", response_model=ActualRead)
+async def trip_actual(
+    log_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_permission(LOG_READ)),
+):
+    """What this trip measured, beside what the pricing model predicted.
+
+    The first time in this platform's life that a transport figure has been
+    checkable against a receipt.
+    """
+    service = TripLogService(db)
+    actual = await service.measured(await service.get(log_id))
+    return ActualRead(
+        distance_km=actual.distance_km,
+        litres=actual.litres,
+        fuel_cost=actual.fuel_cost,
+        currency=actual.currency,
+        model_kmpl=actual.model_kmpl,
+        actual_kmpl=actual.actual_kmpl,
+        model_litres=actual.model_litres,
+        variance_pct=actual.variance_pct,
+    )
+
+
+@router.get("/bookings/{booking_id}/trip-logs", response_model=list[TripLogRead])
+async def booking_logs(
+    booking_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_permission(LOG_READ)),
+):
+    """Every vehicle's log on this booking.
+
+    One per vehicle, not one per booking: a group in two Land Cruisers is two
+    odometers and two sets of receipts, and pooling them would lose exactly the
+    comparison worth making.
+    """
+    return [_log(one) for one in await TripLogService(db).for_booking(booking_id)]
+
+
+@router.get("/operations/fuel-audit", response_model=list[FleetTruthRead])
+async def fuel_audit(
+    since: date | None = Query(
+        default=None, description="Only trips starting on or after this day."
+    ),
+    vehicle_id: uuid.UUID | None = Query(default=None),
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_permission(LOG_READ)),
+):
+    """Whether the fuel figure every quote is priced on is true.
+
+    §2.5 put ``fuel_consumption_kmpl`` on a vehicle and every transport line
+    since has been computed from it. Nothing could ever disprove it — which is
+    a different and quieter failure than a missing column, because a vehicle
+    priced at 8.5 km/L that really does 6.9 under-costs every safari by a fifth
+    for as long as nobody measures.
+
+    This **reports**. It does not change the figure: that is a live pricing
+    input, moving it re-prices work in flight, and deciding a fortnight of
+    receipts is the new truth belongs to whoever will have to explain the
+    margin. Under three measured trips it says so rather than concluding from
+    two.
+    """
+    service = TripLogService(db)
+    found = (
+        [await service.audit_vehicle(vehicle_id, since=since)]
+        if vehicle_id
+        else await service.audit_fleet(since=since)
+    )
+    return [
+        FleetTruthRead(
+            vehicle=one.vehicle,
+            trips=one.trips,
+            distance_km=one.distance_km,
+            litres=one.litres,
+            fuel_cost=one.fuel_cost,
+            currency=one.currency,
+            model_kmpl=one.model_kmpl,
+            actual_kmpl=one.actual_kmpl,
+            findings=[FindingRead(**vars(f)) for f in one.findings],
+        )
+        for one in found
+    ]
+
+
+def _log(row) -> TripLogRead:
+    return TripLogRead(
+        **{
+            key: getattr(row, key)
+            for key in (
+                "id",
+                "assignment_id",
+                "vehicle_id",
+                "booking_id",
+                "odometer_out_km",
+                "odometer_in_km",
+                "started_on",
+                "ended_on",
+                "driver_id",
+                "notes",
+            )
+        },
+        distance_km=row.distance_km,
+        is_open=row.is_open,
+        fills=[FuelFillRead.model_validate(one) for one in row.fills],
     )

@@ -42,7 +42,9 @@ from app.modules.media.models import DestinationImage, PropertyImage  # noqa: F4
 from app.modules.narratives.models import Narrative  # noqa: F401
 from app.modules.operations.models import (  # noqa: F401
     CrewMember,
+    FuelFill,
     TripAssignment,
+    TripLog,
 )
 from app.modules.park_fees.models import ParkFee  # noqa: F401
 from app.modules.portal.models import BookingAccessGrant  # noqa: F401

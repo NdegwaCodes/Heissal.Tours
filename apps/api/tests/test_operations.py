@@ -724,6 +724,388 @@ async def test_operations_can_crew_a_trip_and_cannot_take_money(
     assert refused.status_code == 403, refused.text
 
 
+# --------------------------------------------------------------------------- #
+# What the vehicle actually did (§8.2)
+# --------------------------------------------------------------------------- #
+
+
+async def _out(client, h, assignment_id, **over):
+    body = {"odometer_out_km": "84300"}
+    body.update(over)
+    opened = await client.post(
+        f"{API}/assignments/{assignment_id}/log", headers=h, json=body
+    )
+    assert opened.status_code == 201, opened.text
+    return opened.json()
+
+
+async def test_a_trip_records_what_the_vehicle_actually_did(
+    client, admin_tokens, sample_catalogue, swept
+):
+    """The first time a transport figure has been checkable against a receipt.
+
+    §2.5 put ``fuel_consumption_kmpl`` on a vehicle and every quote since has
+    been priced from it. Nothing could ever disprove it.
+    """
+    h, ids = _h(admin_tokens), sample_catalogue
+    booking = await _booking(client, h, ids, swept)
+    vehicle = await _vehicle(client, h, fuel_consumption_kmpl="8.5")
+    put = await _assign(client, h, booking["id"], vehicle_id=vehicle["id"])
+    assignment_id = put.json()["assignment"]["id"]
+
+    opened = await _out(client, h, assignment_id)
+    log_id = opened["log"]["id"]
+    assert opened["log"]["is_open"] is True
+    assert opened["log"]["distance_km"] is None
+
+    fuelled = await client.post(
+        f"{API}/trip-logs/{log_id}/fuel",
+        headers=h,
+        json={
+            "litres": "130",
+            "amount": "23400",
+            "currency": "KES",
+            "bought_on": TODAY.isoformat(),
+            "station": "Total Ukunda",
+            "receipt_ref": "R-99213",
+        },
+    )
+    assert fuelled.status_code == 201, fuelled.text
+
+    closed = await client.post(
+        f"{API}/trip-logs/{log_id}/close",
+        headers=h,
+        json={"odometer_in_km": "85210"},
+    )
+    assert closed.status_code == 200, closed.text
+    assert D(closed.json()["distance_km"]) == D("910")
+    assert closed.json()["is_open"] is False
+
+    actual = await client.get(f"{API}/trip-logs/{log_id}/actual", headers=h)
+    body = actual.json()
+    assert D(body["distance_km"]) == D("910")
+    assert D(body["litres"]) == D("130")
+    assert D(body["fuel_cost"]) == D("23400")
+    # Priced at 8.5, managed 7.00 — the gap this stage exists to make visible.
+    assert D(body["model_kmpl"]) == D("8.5")
+    assert D(body["actual_kmpl"]) == D("7.00")
+    assert D(body["variance_pct"]) < 0
+
+
+async def test_an_odometer_reading_that_runs_backwards_is_refused(
+    client, admin_tokens, sample_catalogue, swept
+):
+    """A negative distance in a fleet average poisons every figure from it."""
+    h, ids = _h(admin_tokens), sample_catalogue
+    booking = await _booking(client, h, ids, swept)
+    vehicle = await _vehicle(client, h)
+    put = await _assign(client, h, booking["id"], vehicle_id=vehicle["id"])
+    opened = await _out(client, h, put.json()["assignment"]["id"])
+
+    refused = await client.post(
+        f"{API}/trip-logs/{opened['log']['id']}/close",
+        headers=h,
+        json={"odometer_in_km": "83210"},
+    )
+    assert refused.status_code == 400, refused.text
+    assert "does not run backwards" in refused.text
+
+
+async def test_kilometres_between_trips_come_back_as_an_observation(
+    client, admin_tokens, sample_catalogue, swept
+):
+    """The one thing an odometer is uniquely good at seeing.
+
+    Repositioning, a service run, or somebody's weekend — reported without
+    deciding which, and never as an error.
+    """
+    h, ids = _h(admin_tokens), sample_catalogue
+    first = await _booking(client, h, ids, swept)
+    second = await _booking(
+        client,
+        h,
+        ids,
+        swept,
+        arrival=DEPARTURE + timedelta(days=5),
+        departure=DEPARTURE + timedelta(days=8),
+    )
+    vehicle = await _vehicle(client, h)
+
+    one = await _assign(client, h, first["id"], vehicle_id=vehicle["id"])
+    opened = await _out(client, h, one.json()["assignment"]["id"])
+    await client.post(
+        f"{API}/trip-logs/{opened['log']['id']}/close",
+        headers=h,
+        json={"odometer_in_km": "84300"},
+    )
+
+    two = await _assign(client, h, second["id"], vehicle_id=vehicle["id"])
+    again = await _out(
+        client, h, two.json()["assignment"]["id"], odometer_out_km="84910"
+    )
+    assert len(again["observations"]) == 1
+    assert "610 km since the vehicle last came back" in again["observations"][0]
+
+
+async def test_leaving_on_less_than_the_last_return_is_refused(
+    client, admin_tokens, sample_catalogue, swept
+):
+    h, ids = _h(admin_tokens), sample_catalogue
+    first = await _booking(client, h, ids, swept)
+    second = await _booking(
+        client,
+        h,
+        ids,
+        swept,
+        arrival=DEPARTURE + timedelta(days=5),
+        departure=DEPARTURE + timedelta(days=8),
+    )
+    vehicle = await _vehicle(client, h)
+    one = await _assign(client, h, first["id"], vehicle_id=vehicle["id"])
+    opened = await _out(client, h, one.json()["assignment"]["id"])
+    await client.post(
+        f"{API}/trip-logs/{opened['log']['id']}/close",
+        headers=h,
+        json={"odometer_in_km": "84300"},
+    )
+
+    two = await _assign(client, h, second["id"], vehicle_id=vehicle["id"])
+    refused = await client.post(
+        f"{API}/assignments/{two.json()['assignment']['id']}/log",
+        headers=h,
+        json={"odometer_out_km": "84000"},
+    )
+    assert refused.status_code == 400, refused.text
+    assert "One of the two readings is wrong" in refused.text
+
+
+async def test_a_person_does_not_have_an_odometer(
+    client, admin_tokens, sample_catalogue, swept
+):
+    h, ids = _h(admin_tokens), sample_catalogue
+    booking = await _booking(client, h, ids, swept)
+    member = await _crew_member(client, h, swept)
+    put = await _assign(
+        client, h, booking["id"], crew_id=member["id"], role="driver"
+    )
+    refused = await client.post(
+        f"{API}/assignments/{put.json()['assignment']['id']}/log",
+        headers=h,
+        json={"odometer_out_km": "84300"},
+    )
+    assert refused.status_code == 400, refused.text
+    assert "people do not have odometers" in refused.text
+
+
+async def test_one_log_per_vehicle_per_trip(
+    client, admin_tokens, sample_catalogue, swept
+):
+    """A second would double the distance in every fleet average.
+
+    Which is the kind of error that looks like a fact.
+    """
+    h, ids = _h(admin_tokens), sample_catalogue
+    booking = await _booking(client, h, ids, swept)
+    vehicle = await _vehicle(client, h)
+    put = await _assign(client, h, booking["id"], vehicle_id=vehicle["id"])
+    assignment_id = put.json()["assignment"]["id"]
+    await _out(client, h, assignment_id)
+
+    refused = await client.post(
+        f"{API}/assignments/{assignment_id}/log",
+        headers=h,
+        json={"odometer_out_km": "84300"},
+    )
+    assert refused.status_code == 400, refused.text
+    assert "already has a log" in refused.text
+
+
+async def test_a_group_in_two_vehicles_keeps_two_logs(
+    client, admin_tokens, sample_catalogue, swept
+):
+    """Pooling them would lose exactly the comparison worth making."""
+    h, ids = _h(admin_tokens), sample_catalogue
+    booking = await _booking(client, h, ids, swept, pax=9)
+    first = await _vehicle(client, h)
+    second = await _vehicle(client, h)
+    one = await _assign(client, h, booking["id"], vehicle_id=first["id"])
+    two = await _assign(client, h, booking["id"], vehicle_id=second["id"])
+    await _out(client, h, one.json()["assignment"]["id"])
+    await _out(client, h, two.json()["assignment"]["id"], odometer_out_km="51200")
+
+    logs = await client.get(f"{API}/bookings/{booking['id']}/trip-logs", headers=h)
+    assert logs.status_code == 200, logs.text
+    assert len(logs.json()) == 2
+    assert {one["vehicle_id"] for one in logs.json()} == {first["id"], second["id"]}
+
+
+async def test_a_receipt_needs_litres_as_well_as_money(
+    client, admin_tokens, sample_catalogue, swept
+):
+    """A shilling figure alone says nothing about consumption."""
+    h, ids = _h(admin_tokens), sample_catalogue
+    booking = await _booking(client, h, ids, swept)
+    vehicle = await _vehicle(client, h)
+    put = await _assign(client, h, booking["id"], vehicle_id=vehicle["id"])
+    opened = await _out(client, h, put.json()["assignment"]["id"])
+
+    refused = await client.post(
+        f"{API}/trip-logs/{opened['log']['id']}/fuel",
+        headers=h,
+        json={"litres": "0", "amount": "23400", "currency": "KES"},
+    )
+    assert refused.status_code == 422, refused.text
+
+
+async def test_fuel_bought_in_two_currencies_is_not_totalled(
+    client, admin_tokens, sample_catalogue, swept
+):
+    """What the pump charged is a fact; the exchange rate is a decision."""
+    h, ids = _h(admin_tokens), sample_catalogue
+    booking = await _booking(client, h, ids, swept)
+    vehicle = await _vehicle(client, h)
+    put = await _assign(client, h, booking["id"], vehicle_id=vehicle["id"])
+    opened = await _out(client, h, put.json()["assignment"]["id"])
+    log_id = opened["log"]["id"]
+
+    for currency, amount in (("KES", "23400"), ("TZS", "180000")):
+        made = await client.post(
+            f"{API}/trip-logs/{log_id}/fuel",
+            headers=h,
+            json={"litres": "60", "amount": amount, "currency": currency},
+        )
+        assert made.status_code == 201, made.text
+
+    await client.post(
+        f"{API}/trip-logs/{log_id}/close",
+        headers=h,
+        json={"odometer_in_km": "85210"},
+    )
+    refused = await client.get(f"{API}/trip-logs/{log_id}/actual", headers=h)
+    assert refused.status_code == 400, refused.text
+    assert "a decision and not arithmetic" in refused.text
+
+
+async def test_the_fuel_audit_says_the_model_is_out_and_changes_nothing(
+    client, admin_tokens, sample_catalogue, swept
+):
+    """The finding that pays for this stage.
+
+    A vehicle priced at 8.5 km/L that manages about 7 under-costs every safari
+    it goes on — quietly, for as long as nobody measures. The audit says so and
+    leaves ``fuel_consumption_kmpl`` exactly where it was, because moving a live
+    pricing input re-prices work in flight.
+    """
+    h, ids = _h(admin_tokens), sample_catalogue
+    vehicle = await _vehicle(client, h, fuel_consumption_kmpl="8.5")
+
+    odometer = 100000
+    for index in range(3):
+        booking = await _booking(
+            client,
+            h,
+            ids,
+            swept,
+            arrival=ARRIVAL + timedelta(days=index * 10),
+            departure=ARRIVAL + timedelta(days=index * 10 + 3),
+        )
+        put = await _assign(client, h, booking["id"], vehicle_id=vehicle["id"])
+        opened = await _out(
+            client,
+            h,
+            put.json()["assignment"]["id"],
+            odometer_out_km=str(odometer),
+        )
+        await client.post(
+            f"{API}/trip-logs/{opened['log']['id']}/fuel",
+            headers=h,
+            json={"litres": "130", "amount": "23400", "currency": "KES"},
+        )
+        odometer += 910
+        await client.post(
+            f"{API}/trip-logs/{opened['log']['id']}/close",
+            headers=h,
+            json={"odometer_in_km": str(odometer)},
+        )
+
+    report = await client.get(
+        f"{API}/operations/fuel-audit?vehicle_id={vehicle['id']}", headers=h
+    )
+    assert report.status_code == 200, report.text
+    truth = report.json()[0]
+    assert truth["trips"] == 3
+    assert D(truth["actual_kmpl"]) == D("7.00")
+    assert D(truth["model_kmpl"]) == D("8.5")
+    finding = truth["findings"][0]
+    assert finding["code"] == "vehicle_consumption_optimistic"
+    assert "under-costing fuel by about" in finding["message"]
+    assert "nothing here changes it" in finding["message"]
+
+    # And the vehicle is untouched: every quote still prices on 8.5.
+    unchanged = await client.get(f"{API}/vehicles/{vehicle['id']}", headers=h)
+    assert D(unchanged.json()["fuel_consumption_kmpl"]) == D("8.5")
+
+
+async def test_two_trips_are_not_enough_to_conclude_from(
+    client, admin_tokens, sample_catalogue, swept
+):
+    h, ids = _h(admin_tokens), sample_catalogue
+    vehicle = await _vehicle(client, h, fuel_consumption_kmpl="8.5")
+    booking = await _booking(client, h, ids, swept)
+    put = await _assign(client, h, booking["id"], vehicle_id=vehicle["id"])
+    opened = await _out(client, h, put.json()["assignment"]["id"])
+    await client.post(
+        f"{API}/trip-logs/{opened['log']['id']}/fuel",
+        headers=h,
+        json={"litres": "130", "amount": "23400", "currency": "KES"},
+    )
+    await client.post(
+        f"{API}/trip-logs/{opened['log']['id']}/close",
+        headers=h,
+        json={"odometer_in_km": "85210"},
+    )
+
+    report = await client.get(
+        f"{API}/operations/fuel-audit?vehicle_id={vehicle['id']}", headers=h
+    )
+    finding = report.json()[0]["findings"][0]
+    assert finding["code"] == "vehicle_not_enough_data"
+    assert "is not a pattern" in finding["message"]
+
+
+async def test_recording_a_receipt_is_a_different_permission_from_reading_one(
+    client, admin_tokens, sample_catalogue, swept
+):
+    """A fuel receipt is money leaving the business.
+
+    And what a vehicle actually burned is the evidence every future transport
+    price rests on — a wrong figure here mis-prices every safari quietly.
+    """
+    h, ids = _h(admin_tokens), sample_catalogue
+    booking = await _booking(client, h, ids, swept)
+    vehicle = await _vehicle(client, h)
+    put = await _assign(client, h, booking["id"], vehicle_id=vehicle["id"])
+
+    email = unique_email("viewer")
+    made = await client.post(
+        f"{API}/users",
+        headers=h,
+        json={"email": email, "password": "ViewerPass123", "role_keys": ["viewer"]},
+    )
+    assert made.status_code in (200, 201), made.text
+    logged_in = await client.post(
+        f"{API}/auth/login", data={"username": email, "password": "ViewerPass123"}
+    )
+    viewer_h = {"Authorization": f"Bearer {logged_in.json()['access_token']}"}
+
+    refused = await client.post(
+        f"{API}/assignments/{put.json()['assignment']['id']}/log",
+        headers=viewer_h,
+        json={"odometer_out_km": "84300"},
+    )
+    assert refused.status_code == 403, refused.text
+
+
 async def _assign_as(client, headers, booking_id, vehicle_id):
     return await client.post(
         f"{API}/bookings/{booking_id}/assignments",

@@ -26,13 +26,32 @@ from __future__ import annotations
 import uuid
 from collections.abc import Sequence
 from datetime import date
+from decimal import Decimal
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import AppError, NotFoundError
 from app.modules.bookings.models import ACTIVE_STATUSES, Booking
-from app.modules.operations.models import VEHICLE, CrewMember, TripAssignment
+from app.modules.operations.actuals import (
+    DEFAULT_TOLERANCE_PCT,
+    Actual,
+    Fill,
+    FleetTruth,
+    LogRefused,
+    Odometer,
+    audit,
+    check_fill,
+    check_reading,
+    measure,
+)
+from app.modules.operations.models import (
+    VEHICLE,
+    CrewMember,
+    FuelFill,
+    TripAssignment,
+    TripLog,
+)
 from app.modules.operations.roster import (
     CREW_ROLES,
     DRIVES,
@@ -450,6 +469,290 @@ class AssignmentService:
         return out
 
 
+class TripLogService:
+    """What a vehicle actually did, and whether the model is telling the truth.
+
+    Two things worth reading before changing anything.
+
+    **A log is opened and closed, not written in one go.** The vehicle leaves
+    on Monday and comes back on Friday, and the days in between are exactly
+    when somebody wants to know where it is. So ``odometer_in_km`` is nullable
+    and an open log is a visible state rather than a missing row.
+
+    **The audit reports and never applies.** It will tell you a vehicle priced
+    at 8.5 km/L has managed 6.9 over nine trips. It will not change the 8.5:
+    that is a live pricing input, moving it re-prices work in flight, and
+    deciding a fortnight of receipts is the new truth belongs to whoever will
+    have to explain the margin.
+    """
+
+    def __init__(self, db: AsyncSession):
+        self.db = db
+
+    async def open(
+        self,
+        assignment_id: uuid.UUID,
+        *,
+        odometer_out_km: Decimal,
+        started_on: date | None = None,
+        driver_id: uuid.UUID | None = None,
+        notes: str | None = None,
+        actor_id: uuid.UUID | None = None,
+    ) -> tuple[TripLog, list[str]]:
+        """Record a vehicle leaving, and say what the odometer implies.
+
+        Returns the observations as well as the row: kilometres between this
+        reading and the vehicle's last return are not an error — repositioning,
+        a service run — but they are worth somebody knowing about, and a
+        response that says only "created" buries them.
+        """
+        assignment = await self.db.get(TripAssignment, assignment_id)
+        if assignment is None:
+            raise NotFoundError("Assignment not found.")
+        if assignment.vehicle_id is None:
+            raise AppError(
+                "A trip log belongs to a vehicle. This assignment is a person, "
+                "and people do not have odometers."
+            )
+        existing = (
+            await self.db.execute(
+                select(TripLog).where(TripLog.assignment_id == assignment_id)
+            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            raise AppError(
+                f"This vehicle already has a log on booking "
+                f"{await self._reference(assignment.booking_id)}. A second "
+                f"would double the distance in every fleet average."
+            )
+
+        previous = await self._last_closing(assignment.vehicle_id)
+        try:
+            notes_out = check_reading(
+                Odometer(out_km=odometer_out_km), previous_in=previous
+            )
+        except LogRefused as exc:
+            raise AppError(str(exc)) from exc
+
+        row = TripLog(
+            assignment_id=assignment.id,
+            vehicle_id=assignment.vehicle_id,
+            booking_id=assignment.booking_id,
+            odometer_out_km=odometer_out_km,
+            started_on=started_on or assignment.starts_on,
+            driver_id=driver_id,
+            notes=notes,
+            recorded_by=actor_id,
+        )
+        self.db.add(row)
+        await self.db.commit()
+        await self.db.refresh(row)
+        return row, notes_out
+
+    async def close(
+        self,
+        log_id: uuid.UUID,
+        *,
+        odometer_in_km: Decimal,
+        ended_on: date | None = None,
+    ) -> TripLog:
+        """Record a vehicle coming back.
+
+        An ``in`` below the ``out`` is refused rather than stored: a negative
+        distance in a fleet average poisons every figure derived from it, and
+        it is always a typed digit rather than a fact.
+        """
+        row = await self.get(log_id)
+        try:
+            check_reading(
+                Odometer(out_km=row.odometer_out_km, in_km=odometer_in_km)
+            )
+        except LogRefused as exc:
+            raise AppError(str(exc)) from exc
+        row.odometer_in_km = odometer_in_km
+        row.ended_on = ended_on or date.today()
+        await self.db.commit()
+        await self.db.refresh(row)
+        return row
+
+    async def fill(
+        self,
+        log_id: uuid.UUID,
+        *,
+        litres: Decimal,
+        amount: Decimal,
+        currency: str,
+        bought_on: date | None = None,
+        station: str | None = None,
+        receipt_ref: str | None = None,
+        notes: str | None = None,
+        actor_id: uuid.UUID | None = None,
+    ) -> FuelFill:
+        """Record a fuel receipt. Litres and money, both from the paper."""
+        row = await self.get(log_id)
+        when = bought_on or date.today()
+        try:
+            check_fill(
+                Fill(
+                    litres=litres,
+                    amount=amount,
+                    currency=currency,
+                    bought_on=when,
+                )
+            )
+        except LogRefused as exc:
+            raise AppError(str(exc)) from exc
+        fill = FuelFill(
+            trip_log_id=row.id,
+            litres=litres,
+            amount=amount,
+            currency=currency.upper(),
+            bought_on=when,
+            station=station,
+            receipt_ref=receipt_ref,
+            notes=notes,
+            recorded_by=actor_id,
+        )
+        self.db.add(fill)
+        await self.db.commit()
+        await self.db.refresh(fill)
+        return fill
+
+    async def get(self, log_id: uuid.UUID) -> TripLog:
+        row = await self.db.get(TripLog, log_id)
+        if row is None:
+            raise NotFoundError("Trip log not found.")
+        return row
+
+    async def for_booking(self, booking_id: uuid.UUID) -> list[TripLog]:
+        return list(
+            (
+                await self.db.execute(
+                    select(TripLog)
+                    .where(TripLog.booking_id == booking_id)
+                    .order_by(TripLog.started_on)
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+    async def measured(self, log: TripLog) -> Actual:
+        """One log folded into a row of truth, beside the model's prediction."""
+        vehicle = await self.db.get(Vehicle, log.vehicle_id)
+        try:
+            return measure(
+                odometer=Odometer(
+                    out_km=log.odometer_out_km, in_km=log.odometer_in_km
+                ),
+                fills=[_fill(one) for one in log.fills],
+                model_kmpl=vehicle.fuel_consumption_kmpl if vehicle else None,
+            )
+        except LogRefused as exc:
+            raise AppError(str(exc)) from exc
+
+    async def audit_vehicle(
+        self,
+        vehicle_id: uuid.UUID,
+        *,
+        since: date | None = None,
+        tolerance_pct: Decimal | None = None,
+    ) -> FleetTruth:
+        """What a run of receipts says about the number every quote is priced on."""
+        vehicle = await self.db.get(Vehicle, vehicle_id)
+        if vehicle is None:
+            raise NotFoundError("Vehicle not found.")
+        stmt = select(TripLog).where(
+            TripLog.vehicle_id == vehicle_id, TripLog.odometer_in_km.is_not(None)
+        )
+        if since is not None:
+            stmt = stmt.where(TripLog.started_on >= since)
+        logs = list((await self.db.execute(stmt)).scalars().all())
+        actuals = []
+        for log in logs:
+            try:
+                actuals.append(
+                    measure(
+                        odometer=Odometer(
+                            out_km=log.odometer_out_km, in_km=log.odometer_in_km
+                        ),
+                        fills=[_fill(one) for one in log.fills],
+                        model_kmpl=vehicle.fuel_consumption_kmpl,
+                    )
+                )
+            except LogRefused:
+                # A trip fuelled in two currencies cannot be pooled into a
+                # single consumption figure, and dropping it is better than
+                # picking a rate. It stays visible on its own trip.
+                continue
+        return audit(
+            vehicle.name,
+            actuals,
+            model_kmpl=vehicle.fuel_consumption_kmpl,
+            tolerance_pct=(
+                tolerance_pct if tolerance_pct is not None else DEFAULT_TOLERANCE_PCT
+            ),
+        )
+
+    async def audit_fleet(
+        self, *, since: date | None = None
+    ) -> list[FleetTruth]:
+        """Every active vehicle, worst model error first.
+
+        Sorted so the report opens on the vehicle costing the most money — the
+        §5.2 argument about a list nobody works through, applied to a fleet.
+        """
+        vehicles = list(
+            (
+                await self.db.execute(
+                    select(Vehicle).where(Vehicle.is_active.is_(True))
+                )
+            )
+            .scalars()
+            .all()
+        )
+        out = [
+            await self.audit_vehicle(vehicle.id, since=since)
+            for vehicle in vehicles
+        ]
+        return sorted(out, key=_worst_first)
+
+    async def _last_closing(self, vehicle_id: uuid.UUID) -> Decimal | None:
+        """This vehicle's most recent closing reading, for continuity."""
+        return (
+            await self.db.execute(
+                select(TripLog.odometer_in_km)
+                .where(
+                    TripLog.vehicle_id == vehicle_id,
+                    TripLog.odometer_in_km.is_not(None),
+                )
+                .order_by(TripLog.odometer_in_km.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+
+    async def _reference(self, booking_id: uuid.UUID) -> str:
+        booking = await self.db.get(Booking, booking_id)
+        return booking.reference if booking else ""
+
+
+def _fill(row: FuelFill) -> Fill:
+    return Fill(
+        litres=row.litres,
+        amount=row.amount,
+        currency=row.currency,
+        bought_on=row.bought_on,
+    )
+
+
+def _worst_first(truth: FleetTruth) -> tuple:
+    """Most under-costed vehicle first; the ones with no finding last."""
+    variances = [
+        one.variance_pct for one in truth.findings if one.variance_pct is not None
+    ]
+    return (min(variances) if variances else Decimal(0), truth.vehicle)
+
+
 def _crew(member: CrewMember) -> Crew:
     return Crew(
         name=member.name,
@@ -478,5 +781,6 @@ def _default_role(member: CrewMember) -> str:
 __all__ = [
     "AssignmentService",
     "CrewService",
+    "TripLogService",
     "normalise_roles",
 ]

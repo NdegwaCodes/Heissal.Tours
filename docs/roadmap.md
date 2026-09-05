@@ -429,7 +429,23 @@ the group total derived from it so the two always reconcile.
   - `GET /operations/departures` is the operational half of §5.2's morning list; `/operations/diary`
     is the fleet and crew calendar
   - The **`operations` role** finally has permissions — and takes no money
-- ☐ GPS integration · fuel and mileage capture · supplier management
+- ☑ 8.2 **What the vehicle actually did** (`app/modules/operations/actuals.py`, migration
+  `bff02a79fd8c`, 61 tests) — odometer logs and fuel receipts, and the first check anybody has
+  ever been able to make on the figure at the centre of every transport line
+  - §2.5's `fuel_consumption_kmpl` prices every drive and **nothing could disprove it**. A
+    vehicle priced at 8.5 km/L that really does 6.9 under-costs every safari by a fifth, quietly
+  - One log per **vehicle assignment**, opened when it leaves and closed when it returns. An
+    odometer running backwards is refused; kilometres **between** trips are reported, not refused
+  - **Litres and money, both off the receipt** — a litre price computed by division loses the
+    partial fill and the pump that was charging a premium. Two currencies is refused, not converted
+  - Consumption is **pooled** (total km over total litres), left blank below 100 km, and silent
+    under three trips: two trips and a hill is not a pattern
+  - `GET /operations/fuel-audit` **reports and never applies**. Moving a live pricing input
+    re-prices work in flight — a test asserts the vehicle is unchanged after the audit says it is
+    wrong
+  - Not measured: the driver day rate and daily operating cost. Neither is observable from a trip
+    sheet, and a variance computed from a guess would look like evidence
+- ☐ GPS integration · supplier management
 
 ---
 

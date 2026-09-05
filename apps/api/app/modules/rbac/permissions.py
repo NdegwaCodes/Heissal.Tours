@@ -117,6 +117,14 @@ PERMISSIONS: dict[str, str] = {
     # what makes the fleet calendar true, and an operator overriding a clash is
     # making a decision somebody will be held to on the Tuesday morning.
     "assignment:manage": "Put vehicles and crew on trips, and take them off",
+    # --- Stage 8.2: what the vehicle actually did ---
+    "fleet_log:read": "Read odometer logs, fuel receipts and the fuel audit",
+    # Its own permission and not folded into assignment:manage. A fuel receipt
+    # is money leaving the business, and what a vehicle actually burned is the
+    # evidence every future transport price rests on — a wrong figure here
+    # mis-prices every safari quietly, which is worse than mis-crewing one
+    # loudly.
+    "fleet_log:manage": "Record odometer readings and fuel receipts",
 }
 
 # Reference read/manage permission keys, grouped for role assignment.
@@ -192,6 +200,9 @@ ROLE_DEFINITIONS: dict[str, RoleDefinition] = {
             "crew:manage",
             "assignment:read",
             "assignment:manage",
+            # Operations is who reads the odometer and holds the receipts.
+            "fleet_log:read",
+            "fleet_log:manage",
             # They talk to the client about pickups and to suppliers about
             # rooms, and that belongs in the same log as everything else
             # (§5.3).
@@ -212,6 +223,10 @@ ROLE_DEFINITIONS: dict[str, RoleDefinition] = {
             "quote:read_cost",
             "quote:price_override",
             "quote:approve_discount",
+            # Finance reads what trips actually cost — it is the evidence the
+            # transport figures in every quote rest on — and does not record
+            # the receipts, which is operations' job at the pump.
+            "fleet_log:read",
         ],
     },
     "viewer": {

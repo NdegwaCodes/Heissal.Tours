@@ -1758,3 +1758,77 @@ and keeping it would make "what is out on the 5th" a query that has to exclude g
 and carried only `user:read`. It now reads bookings, the fleet and the catalogue, manages crew and
 assignments, and logs communications (§5.3) — and it takes no money: `booking:record_payment` is
 finance's, and a test asserts operations is refused at the till.
+
+**A number nothing could disprove** (Stage 8.2, 2026-09-05)
+Every transport line this platform has ever produced is computed from two figures: a distance
+from the route table (§4.2) and a `fuel_consumption_kmpl` somebody typed onto a `vehicles` row
+once (§2.5). §8.1 committed a real vehicle to a real trip. Nothing had ever recorded what that
+vehicle **did**.
+
+This is a different shape of gap from the ones the earlier stages found. Those were columns
+nothing could fill — loud, once you looked. This one is a number nothing could ever *disprove*: a
+vehicle priced at 8.5 km/L that really manages 6.9 under-costs every safari it goes on by a
+fifth, quietly, for as long as nobody measures. `trip_logs` and `fuel_fills` are what make it
+measurable.
+
+**One log per vehicle assignment, not per booking.** A group of twelve in two Land Cruisers is two
+odometers and two sets of receipts, and pooling them would lose exactly the comparison worth
+making. A unique constraint on the assignment stops a second log doubling the distance in every
+fleet average — the kind of error that looks like a fact.
+
+**Opened and closed, not written in one go.** The vehicle leaves on Monday and comes back on
+Friday, and the days between are precisely when somebody wants to know where it is. So
+`odometer_in_km` is nullable and an open log is a visible state rather than an absent row.
+
+**An odometer does not run backwards**, so a closing reading below the opening one is a typed
+digit and is refused — in the rules and in a CHECK. A negative distance in a fleet average poisons
+every figure derived from it, including the one every future quote is priced on. Leaving on less
+than the vehicle's last return is refused for the same reason.
+
+**But the gap between trips is observed, not refused.** A vehicle back on 84,300 that leaves next
+time on 84,910 did 610 km that no trip paid for. Repositioning, a service run, or somebody's
+weekend — the module says which three it might be and does not choose. It is the one thing an
+odometer is uniquely good at seeing, and it comes back on the response rather than being buried
+under a bare "created".
+
+**Litres and money, both off the receipt, neither derived from the other.** A litre price computed
+by division looks like the same information and is not: it loses the partial fill, the price that
+changed halfway through the trip, and the pump out at Voi charging a premium — which is exactly
+what somebody is looking for when they ask why a trip cost what it did. Fuel bought in two
+currencies is **refused rather than converted**, as a payment is in §7.1: what the pump charged is
+a fact and the exchange rate is a decision. A cross-border run is two lines on the report, not one
+wrong one.
+
+**Consumption is left blank below 100 km.** A 40 km airport transfer with one tankful is
+arithmetic on noise, and publishing it as "3.1 km/L" would put a number nobody believes next to
+nine that they should.
+
+**Pooled, not averaged per trip.** Total kilometres over total litres is what a fleet manager
+means. A mean of per-trip ratios would let one 120 km transfer weigh as much as a 1,400 km
+circuit — and the short trips are the thirsty ones, so it would read low every time. There is a
+test with the two figures side by side.
+
+**The audit reports and never applies.** It will say a vehicle priced at 8.5 has managed 7.0 over
+three trips and that every quote using it under-costs fuel by about 17%. It will not touch
+`fuel_consumption_kmpl`. That is a **live pricing input**: moving it re-prices work in flight, and
+deciding that a fortnight of receipts is the new truth belongs to whoever will have to explain the
+margin. A test asserts the vehicle is unchanged after the audit has said it is wrong.
+
+**Under three measured trips it says so** rather than concluding — two trips and a hill is not a
+pattern — and a variance inside 10% is left alone, because a report that cried about a headwind is
+a report nobody opens. That is §5.2's threshold argument again, and §8.1's.
+
+**Which direction is which.** A model that is optimistic costs money silently. A model that is
+pessimistic is harmless to the margin and is losing work on price. Two findings, two sentences,
+because the action is different.
+
+**What is deliberately not measured:** the driver's day rate and the daily operating cost. Neither
+is observable from a trip sheet — one is payroll, the other amortised depreciation, tyres and
+insurance — and a variance computed from a guess would be worse than the silence, because it would
+look like evidence.
+
+**`fleet_log:read`/`fleet_log:manage` are their own pair**, not folded into `assignment:manage`. A
+fuel receipt is money leaving the business, and what a vehicle actually burned is the evidence
+every future transport price rests on: a wrong figure here mis-prices every safari quietly, which
+is worse than mis-crewing one loudly. Operations records them (it is who holds the receipts);
+finance reads them and does not.
