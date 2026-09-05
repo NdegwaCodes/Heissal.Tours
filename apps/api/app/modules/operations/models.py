@@ -296,3 +296,108 @@ class FuelFill(UUIDPKMixin, TimestampMixin, Base):
     )
 
     log: Mapped[TripLog] = relationship("TripLog", back_populates="fills")
+
+
+class SupplierBooking(UUIDPKMixin, TimestampMixin, Base):
+    """What we owe one supplier for one trip, and whether they have said yes (§8.3).
+
+    §7.1 built the client side completely — what they owe, when, and what has
+    arrived. This is the counterpart that never existed. Every quote is costed
+    from supplier rates and every snapshot carries a ``supplier_paid_total``,
+    and nothing in this system had ever told a hotel a group was coming.
+
+    **``expected_amount`` is typed, not derived.** The snapshot holds one
+    figure for a whole option across every supplier on it; there is no
+    per-hotel split in there to read, so deriving one would be a guess dressed
+    as a fact. An operator copying it off the contract is both more accurate
+    and more honest — the same choice §8.2 made about a driver's day rate.
+
+    **``invoiced_amount`` beside it is the point.** A package costed at 180,000
+    and billed at 195,000 has eaten a fifth of the profit, and until the two
+    sat on one row nothing would ever have compared them.
+
+    Not tied to a specific option or leg: a trip's suppliers are a hotel, a
+    transfer company and a park, and only one of those is on a leg. The row
+    names its own ``service`` instead.
+    """
+
+    __tablename__ = "supplier_bookings"
+    __table_args__ = (
+        CheckConstraint(
+            "status in ('to_request', 'requested', 'confirmed', 'cancelled')",
+            name="ck_supplier_booking_status",
+        ),
+        CheckConstraint(
+            "expected_amount >= 0", name="ck_supplier_booking_expected"
+        ),
+        CheckConstraint(
+            "invoiced_amount is null or invoiced_amount >= 0",
+            name="ck_supplier_booking_invoiced",
+        ),
+        CheckConstraint(
+            "settled_amount is null or settled_amount >= 0",
+            name="ck_supplier_booking_settled",
+        ),
+        CheckConstraint(
+            "check_out is null or check_in is null or check_out >= check_in",
+            name="ck_supplier_booking_dates",
+        ),
+        Index("ix_supplier_booking_booking", "booking_id"),
+        # The payables query: this supplier, everything still open.
+        Index("ix_supplier_booking_supplier", "supplier_id", "status"),
+    )
+
+    booking_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("bookings.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    supplier_id: Mapped[uuid.UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("suppliers.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    #: What we are buying, in the operator's words — "3 x garden twin, HB",
+    #: "Tsavo East park fees, 4 non-resident adults". Free text because a
+    #: hotel, a transfer company and a park gate need three different
+    #: sentences and none of them is a foreign key.
+    service: Mapped[str] = mapped_column(String(300), nullable=False)
+
+    status: Mapped[str] = mapped_column(String(20), default="to_request", nullable=False)
+    #: **Their** reference, not ours. What a hotel can look up while a family
+    #: stands in the lobby, and the reason a confirmation cannot be recorded
+    #: without one.
+    their_reference: Mapped[str | None] = mapped_column(String(120), nullable=True)
+
+    check_in: Mapped[date | None] = mapped_column(Date, nullable=True)
+    check_out: Mapped[date | None] = mapped_column(Date, nullable=True)
+    #: The day this stops being a plan. Per row because a Mara camp in August
+    #: wanted it in February and a Diani hotel in May will take it on the
+    #: Thursday.
+    confirm_by: Mapped[date | None] = mapped_column(Date, nullable=True)
+
+    #: Money is an amount and a currency, as everywhere. A lodge billing in
+    #: dollars beside a transfer company billing in shillings is the normal
+    #: case here, not the exotic one — so nothing is ever summed across them.
+    expected_amount: Mapped[Decimal] = mapped_column(
+        Numeric(14, 2), default=0, nullable=False
+    )
+    #: NULL until the invoice arrives, which is a different thing from zero.
+    invoiced_amount: Mapped[Decimal | None] = mapped_column(
+        Numeric(14, 2), nullable=True
+    )
+    settled_amount: Mapped[Decimal | None] = mapped_column(
+        Numeric(14, 2), nullable=True
+    )
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+
+    requested_on: Mapped[date | None] = mapped_column(Date, nullable=True)
+    confirmed_on: Mapped[date | None] = mapped_column(Date, nullable=True)
+    settled_on: Mapped[date | None] = mapped_column(Date, nullable=True)
+    #: Why it was cancelled, in the words of whoever cancelled it. The next
+    #: person talking to this supplier needs to know whether we moved the dates
+    #: or they let us down.
+    cancel_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )

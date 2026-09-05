@@ -49,6 +49,7 @@ from app.modules.operations.models import (
     VEHICLE,
     CrewMember,
     FuelFill,
+    SupplierBooking,
     TripAssignment,
     TripLog,
 )
@@ -70,6 +71,24 @@ from app.modules.operations.roster import (
     clashes,
     sort_gaps,
 )
+from app.modules.operations.supply import (
+    CANCELLED,
+    CONFIRMED,
+    DEFAULT_CONFIRM_BY_DAYS,
+    REQUESTED,
+    TO_REQUEST,
+    Committed,
+    Concern,
+    Exposure,
+    SupplyRefused,
+    check_invoices,
+    check_supply,
+    check_transition,
+    exposure,
+    normalise_status,
+    unsettled,
+)
+from app.modules.suppliers.models import Supplier
 from app.modules.vehicles.models import Vehicle
 
 
@@ -753,6 +772,326 @@ def _worst_first(truth: FleetTruth) -> tuple:
     return (min(variances) if variances else Decimal(0), truth.vehicle)
 
 
+class SupplyService:
+    """What we owe a trip's suppliers, and whether they have said yes (§8.3).
+
+    Three things worth reading before changing anything.
+
+    **Confirming needs their reference.** A confirmation with no booking number
+    is somebody's recollection of a phone call, and it is exactly the row that
+    turns out to be wrong on the day. Refused in the rules, not warned about.
+
+    **The expected figure is typed, never derived.** The snapshot holds one
+    ``supplier_paid_total`` for a whole option across every supplier on it, so
+    splitting it per hotel would be a guess dressed as a fact.
+
+    **Nothing is summed across currencies.** A lodge billing in dollars beside
+    a transfer company billing in shillings is the normal case here.
+    """
+
+    def __init__(self, db: AsyncSession):
+        self.db = db
+
+    async def add(
+        self,
+        booking_id: uuid.UUID,
+        *,
+        supplier_id: uuid.UUID,
+        service: str,
+        expected_amount: Decimal,
+        currency: str,
+        check_in: date | None = None,
+        check_out: date | None = None,
+        confirm_by: date | None = None,
+        notes: str | None = None,
+        actor_id: uuid.UUID | None = None,
+    ) -> SupplierBooking:
+        """Record something we are buying for this trip.
+
+        Created ``to_request``: the row exists the moment somebody knows the
+        trip needs a hotel, which is well before anybody has rung it. A row
+        that only appeared once it was confirmed would be a list of things
+        already done rather than a list of things to do.
+        """
+        booking = await self.db.get(Booking, booking_id)
+        if booking is None:
+            raise NotFoundError("Booking not found.")
+        if booking.status not in ACTIVE_STATUSES:
+            raise AppError(
+                f"Booking {booking.reference} is {booking.status}, so there is "
+                f"nothing to buy for it."
+            )
+        supplier = await self.db.get(Supplier, supplier_id)
+        if supplier is None:
+            raise NotFoundError("Supplier not found.")
+        if not (service or "").strip():
+            raise AppError(
+                "Say what is being bought. 'Hotel' is not something anybody can "
+                "confirm — '3 x garden twin, half board' is."
+            )
+        if len((currency or "").strip()) != 3:
+            raise AppError(
+                "A supplier commitment needs a currency. Money is an amount and "
+                "a currency here as everywhere else."
+            )
+        row = SupplierBooking(
+            booking_id=booking.id,
+            supplier_id=supplier.id,
+            service=service.strip(),
+            status=TO_REQUEST,
+            expected_amount=expected_amount,
+            currency=currency.upper(),
+            check_in=check_in or booking.arrival_date,
+            check_out=check_out or booking.departure_date,
+            confirm_by=confirm_by,
+            notes=notes,
+            created_by=actor_id,
+        )
+        self.db.add(row)
+        await self.db.commit()
+        await self.db.refresh(row)
+        return row
+
+    async def get(self, supply_id: uuid.UUID) -> SupplierBooking:
+        row = await self.db.get(SupplierBooking, supply_id)
+        if row is None:
+            raise NotFoundError("Supplier booking not found.")
+        return row
+
+    async def move(
+        self,
+        supply_id: uuid.UUID,
+        *,
+        status: str,
+        their_reference: str | None = None,
+        reason: str | None = None,
+        on: date | None = None,
+    ) -> SupplierBooking:
+        """Move a supplier booking on, and stamp when it happened."""
+        row = await self.get(supply_id)
+        try:
+            target = normalise_status(status)
+            check_transition(
+                row.status,
+                target,
+                their_reference=their_reference or row.their_reference,
+                reason=reason,
+            )
+        except SupplyRefused as exc:
+            raise AppError(str(exc)) from exc
+
+        when = on or date.today()
+        if target == REQUESTED:
+            row.requested_on = when
+        elif target == CONFIRMED:
+            row.confirmed_on = when
+            if their_reference:
+                row.their_reference = their_reference.strip()
+        elif target == CANCELLED:
+            row.cancel_reason = (reason or "").strip()
+        row.status = target
+        await self.db.commit()
+        await self.db.refresh(row)
+        return row
+
+    async def invoice(
+        self,
+        supply_id: uuid.UUID,
+        *,
+        amount: Decimal,
+        currency: str | None = None,
+    ) -> SupplierBooking:
+        """Record what they actually billed.
+
+        Refused in another currency, for §7.1's reason: what they invoiced is a
+        fact and the exchange rate is a decision. A supplier who has started
+        billing in dollars is a new commitment, not an amendment to this one.
+        """
+        row = await self.get(supply_id)
+        if currency and currency.upper() != row.currency:
+            raise AppError(
+                f"This was committed in {row.currency} and the invoice is in "
+                f"{currency.upper()}. Recording it would mean choosing an "
+                f"exchange rate, which is a decision and not arithmetic."
+            )
+        if amount < 0:
+            raise AppError("An invoice cannot be for a negative amount.")
+        row.invoiced_amount = amount
+        await self.db.commit()
+        await self.db.refresh(row)
+        return row
+
+    async def settle(
+        self,
+        supply_id: uuid.UUID,
+        *,
+        amount: Decimal,
+        on: date | None = None,
+        currency: str | None = None,
+    ) -> SupplierBooking:
+        """Record what has been paid out.
+
+        A running total rather than a list of payments: this is the payables
+        side and it is coarse on purpose. A full ledger belongs in accounting,
+        and half of one here would be a second place for the figure to be
+        wrong.
+        """
+        row = await self.get(supply_id)
+        if currency and currency.upper() != row.currency:
+            raise AppError(
+                f"This was committed in {row.currency} and the payment is in "
+                f"{currency.upper()}."
+            )
+        if amount < 0:
+            raise AppError("A payment cannot be for a negative amount.")
+        row.settled_amount = amount
+        row.settled_on = on or date.today()
+        await self.db.commit()
+        await self.db.refresh(row)
+        return row
+
+    async def for_booking(self, booking_id: uuid.UUID) -> list[SupplierBooking]:
+        return list(
+            (
+                await self.db.execute(
+                    select(SupplierBooking)
+                    .where(SupplierBooking.booking_id == booking_id)
+                    .order_by(SupplierBooking.check_in, SupplierBooking.service)
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+    async def position(
+        self,
+        booking_id: uuid.UUID,
+        *,
+        today: date | None = None,
+        confirm_by_days: int = DEFAULT_CONFIRM_BY_DAYS,
+    ) -> tuple[Exposure, list[Concern]]:
+        """What is owed on this trip, and everything wrong with its suppliers."""
+        booking = await self.db.get(Booking, booking_id)
+        if booking is None:
+            raise NotFoundError("Booking not found.")
+        when = today or date.today()
+        rows = await self.for_booking(booking_id)
+        committed = [await self._committed(row) for row in rows]
+        concerns = [
+            *check_supply(
+                committed,
+                departs_on=booking.arrival_date,
+                today=when,
+                confirm_by_days=confirm_by_days,
+            ),
+            *check_invoices(committed),
+            *unsettled(
+                committed, departed_on=booking.departure_date, today=when
+            ),
+        ]
+        return exposure(committed), concerns
+
+    async def payables(
+        self, *, supplier_id: uuid.UUID | None = None
+    ) -> list[SupplierBooking]:
+        """Everything still owed, oldest trip first.
+
+        The finance list this stage exists to make possible: §7.1 could say
+        what every client owed us and nothing could say what we owed anybody.
+        """
+        stmt = (
+            select(SupplierBooking)
+            .join(Booking, Booking.id == SupplierBooking.booking_id)
+            .where(
+                SupplierBooking.status != CANCELLED,
+                Booking.status.in_(ACTIVE_STATUSES),
+            )
+            .order_by(SupplierBooking.check_in)
+        )
+        if supplier_id is not None:
+            stmt = stmt.where(SupplierBooking.supplier_id == supplier_id)
+        rows = list((await self.db.execute(stmt)).scalars().all())
+        out = []
+        for row in rows:
+            if (await self._committed(row)).owed > 0:
+                out.append(row)
+        return out
+
+    async def concerns_for(
+        self,
+        bookings: Sequence[Booking],
+        *,
+        today: date,
+        confirm_by_days: int = DEFAULT_CONFIRM_BY_DAYS,
+    ) -> dict[uuid.UUID, list[Concern]]:
+        """Supplier problems across a run of bookings, in two queries.
+
+        For the departure board: §8.1 asked who was driving and never asked
+        whether anybody had rung the hotel, so a trip could show green with no
+        reservation anywhere.
+        """
+        ids = [booking.id for booking in bookings]
+        out: dict[uuid.UUID, list[Concern]] = {one: [] for one in ids}
+        if not ids:
+            return out
+        rows = list(
+            (
+                await self.db.execute(
+                    select(SupplierBooking).where(
+                        SupplierBooking.booking_id.in_(ids)
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        names = await self._supplier_names(rows)
+        by_booking: dict[uuid.UUID, list[Committed]] = {one: [] for one in ids}
+        for row in rows:
+            by_booking[row.booking_id].append(_committed(row, names))
+        for booking in bookings:
+            out[booking.id] = check_supply(
+                by_booking[booking.id],
+                departs_on=booking.arrival_date,
+                today=today,
+                confirm_by_days=confirm_by_days,
+            )
+        return out
+
+    async def _committed(self, row: SupplierBooking) -> Committed:
+        names = await self._supplier_names([row])
+        return _committed(row, names)
+
+    async def _supplier_names(
+        self, rows: Sequence[SupplierBooking]
+    ) -> dict[uuid.UUID, str]:
+        ids = {row.supplier_id for row in rows}
+        if not ids:
+            return {}
+        return {
+            one.id: one.name
+            for one in (
+                await self.db.execute(select(Supplier).where(Supplier.id.in_(ids)))
+            )
+            .scalars()
+            .all()
+        }
+
+
+def _committed(row: SupplierBooking, names: dict[uuid.UUID, str]) -> Committed:
+    return Committed(
+        supplier=names.get(row.supplier_id, "This supplier"),
+        status=row.status,
+        expected=row.expected_amount,
+        invoiced=row.invoiced_amount,
+        settled=row.settled_amount,
+        currency=row.currency,
+        check_in=row.check_in,
+        confirm_by=row.confirm_by,
+        their_reference=row.their_reference or "",
+    )
+
+
 def _crew(member: CrewMember) -> Crew:
     return Crew(
         name=member.name,
@@ -781,6 +1120,7 @@ def _default_role(member: CrewMember) -> str:
 __all__ = [
     "AssignmentService",
     "CrewService",
+    "SupplyService",
     "TripLogService",
     "normalise_roles",
 ]

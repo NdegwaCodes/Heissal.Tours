@@ -1106,6 +1106,408 @@ async def test_recording_a_receipt_is_a_different_permission_from_reading_one(
     assert refused.status_code == 403, refused.text
 
 
+# --------------------------------------------------------------------------- #
+# The supplier side of a booking (§8.3)
+# --------------------------------------------------------------------------- #
+
+
+async def _supplier(client, h, **over):
+    body = {
+        "name": f"Reef House {uuid.uuid4().hex[:6]}",
+        "type": "accommodation",
+        "email": unique_email("supplier"),
+    }
+    body.update(over)
+    made = await client.post(f"{API}/suppliers", headers=h, json=body)
+    assert made.status_code == 201, made.text
+    return made.json()
+
+
+async def _commit(client, h, booking_id, supplier_id, **over):
+    body = {
+        "supplier_id": supplier_id,
+        "service": "3 x garden twin, half board",
+        "expected_amount": "180000",
+        "currency": "KES",
+    }
+    body.update(over)
+    made = await client.post(
+        f"{API}/bookings/{booking_id}/suppliers", headers=h, json=body
+    )
+    assert made.status_code == 201, made.text
+    return made.json()
+
+
+async def test_a_trip_records_what_it_owes_its_suppliers(
+    client, admin_tokens, sample_catalogue, swept
+):
+    """The counterpart §7.1 never had.
+
+    It could say what every client owed us; nothing anywhere could say what we
+    owed the hotel.
+    """
+    h, ids = _h(admin_tokens), sample_catalogue
+    booking = await _booking(client, h, ids, swept)
+    supplier = await _supplier(client, h)
+
+    row = await _commit(client, h, booking["id"], supplier["id"])
+    # Created "to request": the row exists the moment somebody knows the trip
+    # needs a hotel, which is before anybody has rung it.
+    assert row["status"] == "to_request"
+    assert row["check_in"] == ARRIVAL.isoformat()
+    assert D(row["expected_amount"]) == D("180000")
+    assert row["invoiced_amount"] is None
+
+    position = await client.get(
+        f"{API}/bookings/{booking['id']}/supply-position", headers=h
+    )
+    assert position.status_code == 200, position.text
+    body = position.json()
+    assert body["exposure"]["expected"] == {"KES": "180000.00"}
+    assert body["exposure"]["owed"] == {"KES": "180000.00"}
+    assert body["exposure"]["unconfirmed"] == 1
+    assert body["exposure"]["all_confirmed"] is False
+
+
+async def test_a_confirmation_needs_the_suppliers_own_reference(
+    client, admin_tokens, sample_catalogue, swept
+):
+    """Without one this is somebody's recollection of a phone call.
+
+    And it is exactly the row that turns out to be wrong on the day — the
+    reference is what a hotel can look up while a family stands in the lobby.
+    """
+    h, ids = _h(admin_tokens), sample_catalogue
+    booking = await _booking(client, h, ids, swept)
+    supplier = await _supplier(client, h)
+    row = await _commit(client, h, booking["id"], supplier["id"])
+
+    refused = await client.post(
+        f"{API}/supplier-bookings/{row['id']}/status",
+        headers=h,
+        json={"status": "confirmed"},
+    )
+    assert refused.status_code == 400, refused.text
+    assert "stands in the lobby" in refused.text
+
+    held = await client.post(
+        f"{API}/supplier-bookings/{row['id']}/status",
+        headers=h,
+        json={"status": "confirmed", "their_reference": "RH-88421"},
+    )
+    assert held.status_code == 200, held.text
+    assert held.json()["their_reference"] == "RH-88421"
+    assert held.json()["confirmed_on"] == TODAY.isoformat()
+
+
+async def test_cancelling_a_reservation_needs_a_reason(
+    client, admin_tokens, sample_catalogue, swept
+):
+    h, ids = _h(admin_tokens), sample_catalogue
+    booking = await _booking(client, h, ids, swept)
+    supplier = await _supplier(client, h)
+    row = await _commit(client, h, booking["id"], supplier["id"])
+
+    refused = await client.post(
+        f"{API}/supplier-bookings/{row['id']}/status",
+        headers=h,
+        json={"status": "cancelled"},
+    )
+    assert refused.status_code == 400, refused.text
+    assert "we moved the dates or they let us down" in refused.text
+
+    off = await client.post(
+        f"{API}/supplier-bookings/{row['id']}/status",
+        headers=h,
+        json={"status": "cancelled", "reason": "Client moved the dates."},
+    )
+    assert off.status_code == 200, off.text
+    assert off.json()["cancel_reason"] == "Client moved the dates."
+
+
+async def test_a_trip_with_no_reservation_at_the_lodge_shows_on_the_board(
+    client, admin_tokens, sample_catalogue, swept
+):
+    """The failure this stage exists for.
+
+    §8.1 asked who was driving and never asked whether anybody had rung the
+    hotel — so a departure board could be green on vehicle, driver and seats
+    while the lodge had no reservation.
+    """
+    h, ids = _h(admin_tokens), sample_catalogue
+    booking = await _booking(client, h, ids, swept, arrival=TODAY + timedelta(days=7),
+                             departure=TODAY + timedelta(days=10))
+    vehicle = await _vehicle(client, h)
+    member = await _crew_member(client, h, swept)
+    await _assign(client, h, booking["id"], vehicle_id=vehicle["id"])
+    await _assign(client, h, booking["id"], crew_id=member["id"], role="driver")
+    supplier = await _supplier(client, h)
+    await _commit(client, h, booking["id"], supplier["id"])
+
+    board = await client.get(f"{API}/operations/departures?days=30", headers=h)
+    assert board.status_code == 200, board.text
+    mine = next(
+        one for one in board.json() if one["reference"] == booking["reference"]
+    )
+    # Crewed, so nothing in gaps...
+    assert mine["gaps"] == []
+    # ...and the thing that would have ended the trip is in its own column.
+    assert [one["code"] for one in mine["supply"]] == ["supplier_not_requested"]
+    assert "Nobody has told them a group is coming" in mine["supply"][0]["message"]
+
+
+async def test_a_confirmed_supplier_clears_the_board(
+    client, admin_tokens, sample_catalogue, swept
+):
+    h, ids = _h(admin_tokens), sample_catalogue
+    booking = await _booking(client, h, ids, swept, arrival=TODAY + timedelta(days=7),
+                             departure=TODAY + timedelta(days=10))
+    vehicle = await _vehicle(client, h)
+    member = await _crew_member(client, h, swept)
+    await _assign(client, h, booking["id"], vehicle_id=vehicle["id"])
+    await _assign(client, h, booking["id"], crew_id=member["id"], role="driver")
+    supplier = await _supplier(client, h)
+    row = await _commit(client, h, booking["id"], supplier["id"])
+    await client.post(
+        f"{API}/supplier-bookings/{row['id']}/status",
+        headers=h,
+        json={"status": "confirmed", "their_reference": "RH-88421"},
+    )
+
+    board = await client.get(f"{API}/operations/departures?days=30", headers=h)
+    mine = next(
+        one for one in board.json() if one["reference"] == booking["reference"]
+    )
+    assert mine["gaps"] == []
+    assert mine["supply"] == []
+
+
+async def test_an_invoice_over_budget_says_where_the_margin_went(
+    client, admin_tokens, sample_catalogue, swept
+):
+    """The comparison nothing in this system could make until now.
+
+    §8.2's argument about the fuel model, in a different currency: a package
+    costed at 180,000 and billed at 195,000 has eaten a fifth of the profit.
+    """
+    h, ids = _h(admin_tokens), sample_catalogue
+    booking = await _booking(client, h, ids, swept)
+    supplier = await _supplier(client, h)
+    row = await _commit(client, h, booking["id"], supplier["id"])
+    await client.post(
+        f"{API}/supplier-bookings/{row['id']}/status",
+        headers=h,
+        json={"status": "confirmed", "their_reference": "RH-88421"},
+    )
+
+    billed = await client.post(
+        f"{API}/supplier-bookings/{row['id']}/invoice",
+        headers=h,
+        json={"amount": "195000", "currency": "KES"},
+    )
+    assert billed.status_code == 200, billed.text
+    assert D(billed.json()["invoiced_amount"]) == D("195000")
+
+    position = await client.get(
+        f"{API}/bookings/{booking['id']}/supply-position", headers=h
+    )
+    concern = next(
+        one
+        for one in position.json()["concerns"]
+        if one["code"] == "supplier_invoiced_over"
+    )
+    assert "straight out of the margin" in concern["message"]
+    # And what is owed follows the invoice, not the budget.
+    assert position.json()["exposure"]["owed"] == {"KES": "195000.00"}
+
+
+async def test_an_invoice_in_another_currency_is_refused(
+    client, admin_tokens, sample_catalogue, swept
+):
+    """What they invoiced is a fact and the exchange rate is a decision.
+
+    §7.1's rule about a client payment, on the payables side.
+    """
+    h, ids = _h(admin_tokens), sample_catalogue
+    booking = await _booking(client, h, ids, swept)
+    supplier = await _supplier(client, h)
+    row = await _commit(client, h, booking["id"], supplier["id"])
+
+    refused = await client.post(
+        f"{API}/supplier-bookings/{row['id']}/invoice",
+        headers=h,
+        json={"amount": "1400", "currency": "USD"},
+    )
+    assert refused.status_code == 400, refused.text
+    assert "a decision and not arithmetic" in refused.text
+
+
+async def test_settling_a_supplier_clears_what_is_owed(
+    client, admin_tokens, sample_catalogue, swept
+):
+    h, ids = _h(admin_tokens), sample_catalogue
+    booking = await _booking(client, h, ids, swept)
+    supplier = await _supplier(client, h)
+    row = await _commit(client, h, booking["id"], supplier["id"])
+    await client.post(
+        f"{API}/supplier-bookings/{row['id']}/invoice",
+        headers=h,
+        json={"amount": "180000"},
+    )
+
+    paid = await client.post(
+        f"{API}/supplier-bookings/{row['id']}/settle",
+        headers=h,
+        json={"amount": "180000", "on": TODAY.isoformat()},
+    )
+    assert paid.status_code == 200, paid.text
+
+    position = await client.get(
+        f"{API}/bookings/{booking['id']}/supply-position", headers=h
+    )
+    assert position.json()["exposure"]["owed"] == {}
+    assert position.json()["exposure"]["settled"] == {"KES": "180000.00"}
+
+
+async def test_payables_lists_everything_still_owed(
+    client, admin_tokens, sample_catalogue, swept
+):
+    """The finance list this stage exists to make possible."""
+    h, ids = _h(admin_tokens), sample_catalogue
+    booking = await _booking(client, h, ids, swept)
+    owing = await _supplier(client, h)
+    settled = await _supplier(client, h)
+    open_row = await _commit(client, h, booking["id"], owing["id"])
+    closed = await _commit(
+        client, h, booking["id"], settled["id"], expected_amount="40000"
+    )
+    await client.post(
+        f"{API}/supplier-bookings/{closed['id']}/settle",
+        headers=h,
+        json={"amount": "40000"},
+    )
+
+    listed = await client.get(f"{API}/operations/payables", headers=h)
+    assert listed.status_code == 200, listed.text
+    ids_out = {one["id"] for one in listed.json()}
+    assert open_row["id"] in ids_out
+    assert closed["id"] not in ids_out
+
+
+async def test_a_cancelled_booking_is_not_bought_for(
+    client, admin_tokens, sample_catalogue, swept
+):
+    h, ids = _h(admin_tokens), sample_catalogue
+    booking = await _booking(client, h, ids, swept)
+    supplier = await _supplier(client, h)
+    await client.post(
+        f"{API}/bookings/{booking['id']}/cancel",
+        headers=h,
+        json={"reason": "Client's visa was refused."},
+    )
+    refused = await client.post(
+        f"{API}/bookings/{booking['id']}/suppliers",
+        headers=h,
+        json={
+            "supplier_id": supplier["id"],
+            "service": "3 x garden twin",
+            "expected_amount": "180000",
+            "currency": "KES",
+        },
+    )
+    assert refused.status_code == 400, refused.text
+    assert "nothing to buy for it" in refused.text
+
+
+async def test_a_service_nobody_can_confirm_is_refused(
+    client, admin_tokens, sample_catalogue, swept
+):
+    """"Hotel" is not something anybody can confirm.
+
+    "3 x garden twin, half board" is — and it is what a supplier reads back.
+    """
+    h, ids = _h(admin_tokens), sample_catalogue
+    booking = await _booking(client, h, ids, swept)
+    supplier = await _supplier(client, h)
+    refused = await client.post(
+        f"{API}/bookings/{booking['id']}/suppliers",
+        headers=h,
+        json={
+            "supplier_id": supplier["id"],
+            "service": "   ",
+            "expected_amount": "180000",
+            "currency": "KES",
+        },
+    )
+    assert refused.status_code in (400, 422), refused.text
+
+
+async def test_two_currencies_on_one_trip_are_never_added_together(
+    client, admin_tokens, sample_catalogue, swept
+):
+    """A lodge billing in dollars beside a transfer in shillings.
+
+    The normal case here, not the exotic one — and one added figure would be
+    wrong in a way nobody can see.
+    """
+    h, ids = _h(admin_tokens), sample_catalogue
+    booking = await _booking(client, h, ids, swept)
+    lodge = await _supplier(client, h)
+    transfers = await _supplier(client, h, type="transport")
+    await _commit(client, h, booking["id"], lodge["id"], currency="USD",
+                  expected_amount="1400")
+    await _commit(client, h, booking["id"], transfers["id"], currency="KES",
+                  expected_amount="18000", service="Airport transfer, return")
+
+    position = await client.get(
+        f"{API}/bookings/{booking['id']}/supply-position", headers=h
+    )
+    owed = position.json()["exposure"]["owed"]
+    assert owed == {"USD": "1400.00", "KES": "18000.00"}
+
+
+async def test_confirming_a_supplier_is_its_own_permission(
+    client, admin_tokens, sample_catalogue, swept
+):
+    """It commits the business to somebody else's invoice.
+
+    And cancelling one gives a room away. Neither is the same act as putting a
+    vehicle on a trip.
+    """
+    h, ids = _h(admin_tokens), sample_catalogue
+    booking = await _booking(client, h, ids, swept)
+    supplier = await _supplier(client, h)
+
+    email = unique_email("finance")
+    made = await client.post(
+        f"{API}/users",
+        headers=h,
+        json={"email": email, "password": "FinancePass1", "role_keys": ["finance"]},
+    )
+    assert made.status_code in (200, 201), made.text
+    logged_in = await client.post(
+        f"{API}/auth/login", data={"username": email, "password": "FinancePass1"}
+    )
+    finance_h = {"Authorization": f"Bearer {logged_in.json()['access_token']}"}
+
+    # Finance can see the payables — the half of the money nothing could see
+    # before §8.3 — and cannot commit the business to a room.
+    assert (
+        await client.get(f"{API}/operations/payables", headers=finance_h)
+    ).status_code == 200
+    refused = await client.post(
+        f"{API}/bookings/{booking['id']}/suppliers",
+        headers=finance_h,
+        json={
+            "supplier_id": supplier["id"],
+            "service": "3 x garden twin",
+            "expected_amount": "180000",
+            "currency": "KES",
+        },
+    )
+    assert refused.status_code == 403, refused.text
+
+
 async def _assign_as(client, headers, booking_id, vehicle_id):
     return await client.post(
         f"{API}/bookings/{booking_id}/assignments",

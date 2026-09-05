@@ -445,7 +445,22 @@ the group total derived from it so the two always reconcile.
     wrong
   - Not measured: the driver day rate and daily operating cost. Neither is observable from a trip
     sheet, and a variance computed from a guess would look like evidence
-- ☐ GPS integration · supplier management
+- ☑ 8.3 **The supplier side of a booking** (`app/modules/operations/supply.py`, migration
+  `90dd20bbab6a`, 41 tests) — §7.1 could say what every client owed us; nothing could say what we
+  owed the hotel, and `suppliers` was a contact list
+  - **Nobody had ever told the lodge.** An unconfirmed supplier is now its own column on the §8.1
+    departure board — a board green on vehicle, driver and seats with no reservation anywhere is
+    the failure this exists for. The threshold is the caller's, and `confirm_by` is per row
+  - **Where the margin went**: `expected_amount` beside `invoiced_amount` on one row. A package
+    costed at 180,000 and billed at 195,000 has eaten a fifth of the profit and nothing would ever
+    have compared them. Under-billing is reported too — the rest arrives after the trip is closed
+  - The expected figure is **typed off the contract, not derived**: the snapshot has one number
+    for a whole option across every supplier on it
+  - **Confirming needs their reference** (a confirmation with no booking number is somebody's
+    recollection of a phone call); cancelling needs a reason; a cancelled room is asked for again
+    rather than revived
+  - `GET /operations/payables` is the list finance never had. Nothing is summed across currencies
+- ☐ GPS integration — needs a provider and vehicles actually fitted; not built on spec
 
 ---
 

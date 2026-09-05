@@ -16,16 +16,23 @@ from app.modules.operations.schemas import (
     AssignmentMade,
     AssignmentRead,
     ClashRead,
+    ConcernRead,
     CrewCreate,
     CrewRead,
     CrewUpdate,
     DepartureRead,
+    ExposureRead,
     FindingRead,
     FleetTruthRead,
     FuelFillCreate,
     FuelFillRead,
     GapRead,
     RosterRead,
+    SupplierAmount,
+    SupplierBookingCreate,
+    SupplierBookingMove,
+    SupplierBookingRead,
+    SupplyPositionRead,
     TripLogClose,
     TripLogOpen,
     TripLogOpened,
@@ -34,6 +41,7 @@ from app.modules.operations.schemas import (
 from app.modules.operations.service import (
     AssignmentService,
     CrewService,
+    SupplyService,
     TripLogService,
 )
 from app.modules.users.models import User
@@ -48,6 +56,10 @@ ASSIGN_MANAGE = "assignment:manage"
 #: transport price rests on, and a fuel receipt is money leaving the business.
 LOG_READ = "fleet_log:read"
 LOG_MANAGE = "fleet_log:manage"
+#: Its own pair again. Confirming a supplier commits the business to somebody
+#: else's invoice, which is a different act from crewing a trip.
+SUPPLY_READ = "supply:read"
+SUPPLY_MANAGE = "supply:manage"
 
 
 # --------------------------------------------------------------------------- #
@@ -209,6 +221,12 @@ async def departures(
     spreadsheet of who was driving.
     """
     found = await AssignmentService(db).departures(days=days)
+    # The question §8.1 never asked: has anybody rung the hotel? A board
+    # showing a vehicle, a driver and enough seats, all green, with no
+    # reservation at the lodge is the failure this column exists for.
+    supply = await SupplyService(db).concerns_for(
+        [booking for booking, _roster, _gaps in found], today=date.today()
+    )
     return [
         DepartureRead(
             booking_id=booking.id,
@@ -224,6 +242,9 @@ async def departures(
                 seats=roster.seats,
             ),
             gaps=[GapRead(**vars(one)) for one in gaps],
+            supply=[
+                ConcernRead(**vars(one)) for one in supply.get(booking.id, [])
+            ],
         )
         for booking, roster, gaps in found
     ]
@@ -433,3 +454,169 @@ def _log(row) -> TripLogRead:
         is_open=row.is_open,
         fills=[FuelFillRead.model_validate(one) for one in row.fills],
     )
+
+
+# --------------------------------------------------------------------------- #
+# The supplier side of a booking (§8.3)
+# --------------------------------------------------------------------------- #
+
+
+@router.post(
+    "/bookings/{booking_id}/suppliers",
+    response_model=SupplierBookingRead,
+    status_code=201,
+)
+async def add_supplier(
+    booking_id: uuid.UUID,
+    body: SupplierBookingCreate,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(require_permission(SUPPLY_MANAGE)),
+):
+    """Record something this trip has to buy.
+
+    Created **to request**: the row exists the moment somebody knows the trip
+    needs a hotel, which is well before anybody has rung it. A row that only
+    appeared once it was confirmed would be a list of things already done
+    rather than a list of things to do.
+
+    ``expected_amount`` is typed off the contract rather than derived. The
+    snapshot holds one ``supplier_paid_total`` for a whole option across every
+    supplier on it, so splitting it per hotel would be a guess dressed as a
+    fact — the same choice §8.2 made about a driver's day rate.
+    """
+    return await SupplyService(db).add(
+        booking_id, actor_id=actor.id, **body.model_dump(exclude_unset=True)
+    )
+
+
+@router.get(
+    "/bookings/{booking_id}/suppliers", response_model=list[SupplierBookingRead]
+)
+async def booking_suppliers(
+    booking_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_permission(SUPPLY_READ)),
+):
+    return await SupplyService(db).for_booking(booking_id)
+
+
+@router.post(
+    "/supplier-bookings/{supply_id}/status", response_model=SupplierBookingRead
+)
+async def move_supplier(
+    supply_id: uuid.UUID,
+    body: SupplierBookingMove,
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_permission(SUPPLY_MANAGE)),
+):
+    """Move a supplier booking on: requested, confirmed, or cancelled.
+
+    **Confirming needs their reference.** A confirmation with no booking number
+    is somebody's recollection of a phone call, and it is exactly the row that
+    turns out to be wrong on the day — the reference is what a hotel can look
+    up while a family stands in the lobby.
+
+    **Cancelling needs a reason**, for §5.2's argument about a lost lead: the
+    next person to talk to this supplier needs to know whether we moved the
+    dates or they let us down.
+    """
+    return await SupplyService(db).move(
+        supply_id,
+        status=body.status,
+        their_reference=body.their_reference,
+        reason=body.reason,
+        on=body.on,
+    )
+
+
+@router.post(
+    "/supplier-bookings/{supply_id}/invoice", response_model=SupplierBookingRead
+)
+async def record_invoice(
+    supply_id: uuid.UUID,
+    body: SupplierAmount,
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_permission(SUPPLY_MANAGE)),
+):
+    """Record what the supplier actually billed.
+
+    The point of the whole stage: a package costed at 180,000 and invoiced at
+    195,000 has eaten a fifth of the profit, and until these two figures sat on
+    one row nothing would ever have compared them. §8.2's argument about the
+    fuel model, in a different currency.
+    """
+    return await SupplyService(db).invoice(
+        supply_id, amount=body.amount, currency=body.currency
+    )
+
+
+@router.post(
+    "/supplier-bookings/{supply_id}/settle", response_model=SupplierBookingRead
+)
+async def record_settlement(
+    supply_id: uuid.UUID,
+    body: SupplierAmount,
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_permission(SUPPLY_MANAGE)),
+):
+    """Record what has been paid out.
+
+    A running total rather than a list of payments, deliberately: this is the
+    payables side and it is coarse on purpose. A full ledger belongs in
+    accounting, and half of one here would be a second place for the figure to
+    be wrong.
+    """
+    return await SupplyService(db).settle(
+        supply_id, amount=body.amount, currency=body.currency, on=body.on
+    )
+
+
+@router.get(
+    "/bookings/{booking_id}/supply-position", response_model=SupplyPositionRead
+)
+async def supply_position(
+    booking_id: uuid.UUID,
+    confirm_by_days: int = Query(
+        default=14,
+        ge=1,
+        le=365,
+        description="Days before departure an unconfirmed supplier is a problem.",
+    ),
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_permission(SUPPLY_READ)),
+):
+    """What is owed on this trip, and everything wrong with its suppliers.
+
+    The threshold is the caller's. A Diani hotel in May will take a booking on
+    the Thursday; a Mara camp in August wanted it in February, and no default
+    here can tell those apart.
+    """
+    found, concerns = await SupplyService(db).position(
+        booking_id, confirm_by_days=confirm_by_days
+    )
+    return SupplyPositionRead(
+        exposure=ExposureRead(
+            expected=found.expected,
+            invoiced=found.invoiced,
+            settled=found.settled,
+            owed=found.owed,
+            suppliers=found.suppliers,
+            unconfirmed=found.unconfirmed,
+            all_confirmed=found.all_confirmed,
+        ),
+        concerns=[ConcernRead(**vars(one)) for one in concerns],
+    )
+
+
+@router.get("/operations/payables", response_model=list[SupplierBookingRead])
+async def payables(
+    supplier_id: uuid.UUID | None = Query(default=None),
+    db: AsyncSession = Depends(get_db),
+    _=Depends(require_permission(SUPPLY_READ)),
+):
+    """Everything still owed to suppliers, soonest trip first.
+
+    The list this stage exists to make possible: §7.1 could say what every
+    client owed us, and nothing anywhere could say what we owed anybody else.
+    """
+    return await SupplyService(db).payables(supplier_id=supplier_id)

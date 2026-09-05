@@ -1832,3 +1832,72 @@ fuel receipt is money leaving the business, and what a vehicle actually burned i
 every future transport price rests on: a wrong figure here mis-prices every safari quietly, which
 is worse than mis-crewing one loudly. Operations records them (it is who holds the receipts);
 finance reads them and does not.
+
+**Nobody had ever told the hotel** (Stage 8.3, 2026-09-05)
+§7.1 built the client side of a booking completely: what they owe, when, and what has arrived.
+There has never been a counterpart. Every quote is costed from supplier rates and every version
+snapshot carries a `supplier_paid_total`, and nothing in this system had ever told a hotel that a
+group was coming, recorded that they said yes, or noticed that they invoiced more than we
+budgeted. `suppliers` was a contact list.
+
+Two failures follow from that, and they are the two that end an operator's career.
+
+**The room was never actually booked.** A trip departs, the §8.1 departure board is green —
+vehicle, driver, enough seats — and the lodge has no reservation. §8.1 asked who was driving; it
+never asked whether anybody had rung. So an unconfirmed supplier is now its own column on that
+board, kept apart from the crew gaps because it is somebody else's answer to chase rather than
+something to allocate. On a threshold the business sets: a Diani hotel in May will take a booking
+on the Thursday and a Mara camp in August wanted it in February, and no default can tell those
+apart. `confirm_by` is per row for the same reason.
+
+**The margin quietly went.** A package costed at 180,000 and invoiced at 195,000 has eaten a fifth
+of the profit, and until `expected_amount` and `invoiced_amount` sat on the same row nothing would
+ever have compared them. This is §8.2's argument in a different currency: an estimate with no
+actual beside it is a number that cannot be wrong. **Under**-billing is reported too, and not as
+good news — the rest usually arrives after the trip has been reconciled and closed.
+
+**`expected_amount` is typed, not derived.** The snapshot holds one `supplier_paid_total` for a
+whole option across every supplier on it; there is no per-hotel split in there to read, so
+producing one would be a guess dressed as a fact. An operator copying the figure off the contract
+is both more accurate and more honest — the same choice §8.2 made about a driver's day rate and
+§7.1 made about a cancellation charge.
+
+**Confirming needs their reference.** A confirmation with no booking number is somebody's
+recollection of a phone call, and it is exactly the row that turns out to be wrong on the day. The
+reference is what a hotel can look up while a family stands in the lobby, so it is a refusal
+rather than a nullable field somebody means to fill in.
+
+**Cancelling needs a reason**, for §5.2's argument about a lost lead: the next person to talk to
+this supplier needs to know whether we moved the dates or they let us down. And a cancelled
+reservation cannot be revived straight back to confirmed — it goes back to *to request* and gets
+asked for again, because reviving one without asking is how two groups end up in one room.
+
+**A row is created `to_request`.** It exists the moment somebody knows the trip needs a hotel,
+which is well before anybody has rung it. A row that only appeared once it was confirmed would be
+a list of things already done rather than a list of things to do — and the list of things to do is
+the entire point.
+
+**`owed` falls back to the budget, not to zero.** A supplier who has not invoiced yet is not a
+supplier who is owed nothing, and a payables figure that quietly ignored them would be exactly
+wrong in the direction that hurts. It never goes negative either, as §7.1's client balance does
+not.
+
+**Nothing is summed across currencies**, here as everywhere: a lodge billing in dollars beside a
+transfer company billing in shillings is the normal case in this market, and one added figure is
+wrong in a way nobody can see. An invoice in a different currency from the commitment is refused
+rather than converted — §7.1's rule about a client payment, on the payables side.
+
+**Settlement is a running total, not a ledger.** Deliberately coarse: a full accounts-payable
+ledger belongs in accounting software, and half of one here would be a second place for the figure
+to be wrong.
+
+**Not tied to an option or a leg.** A trip's suppliers are a hotel, a transfer company and a park
+gate, and only one of those is on a leg. The row names its own `service` in the operator's words —
+"3 x garden twin, half board" — because "Hotel" is not something anybody can confirm, and a
+supplier reads the sentence back down the telephone.
+
+**`supply:read`/`supply:manage`.** Confirming a supplier commits the business to somebody else's
+invoice and cancelling one gives a room away; neither is the same act as putting a vehicle on a
+trip. Operations manages them (it is who rings the hotel); **finance reads** them, which is the
+first time anything in this platform could tell finance what the business owes rather than only
+what it is owed.

@@ -125,6 +125,12 @@ PERMISSIONS: dict[str, str] = {
     # mis-prices every safari quietly, which is worse than mis-crewing one
     # loudly.
     "fleet_log:manage": "Record odometer readings and fuel receipts",
+    # --- Stage 8.3: the supplier side of a booking ---
+    "supply:read": "See what a trip owes its suppliers and what is confirmed",
+    # Its own permission: confirming a supplier commits the business to
+    # somebody else's invoice, and cancelling one gives a room away. Neither is
+    # the same act as putting a vehicle on a trip.
+    "supply:manage": "Request, confirm and settle supplier bookings",
 }
 
 # Reference read/manage permission keys, grouped for role assignment.
@@ -203,6 +209,9 @@ ROLE_DEFINITIONS: dict[str, RoleDefinition] = {
             # Operations is who reads the odometer and holds the receipts.
             "fleet_log:read",
             "fleet_log:manage",
+            # Operations is who rings the hotel.
+            "supply:read",
+            "supply:manage",
             # They talk to the client about pickups and to suppliers about
             # rooms, and that belongs in the same log as everything else
             # (§5.3).
@@ -227,6 +236,9 @@ ROLE_DEFINITIONS: dict[str, RoleDefinition] = {
             # transport figures in every quote rest on — and does not record
             # the receipts, which is operations' job at the pump.
             "fleet_log:read",
+            # Payables: the other half of the money, and the half nothing in
+            # this system could see before §8.3.
+            "supply:read",
         ],
     },
     "viewer": {

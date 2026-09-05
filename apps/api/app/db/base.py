@@ -43,6 +43,7 @@ from app.modules.narratives.models import Narrative  # noqa: F401
 from app.modules.operations.models import (  # noqa: F401
     CrewMember,
     FuelFill,
+    SupplierBooking,
     TripAssignment,
     TripLog,
 )

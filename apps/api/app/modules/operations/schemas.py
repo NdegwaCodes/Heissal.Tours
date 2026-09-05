@@ -128,6 +128,14 @@ class RosterRead(BaseModel):
     seats: int = 0
 
 
+class ConcernRead(BaseModel):
+    code: str
+    message: str
+    supplier: str = ""
+    days: int = 0
+    variance_pct: Decimal | None = None
+
+
 class DepartureRead(BaseModel):
     """One trip on the departure board."""
 
@@ -143,6 +151,12 @@ class DepartureRead(BaseModel):
     #: deliberately not in here — whether a trip needs one depends on what the
     #: client asked for.
     gaps: list[GapRead] = Field(default_factory=list)
+    #: Suppliers who have not confirmed (§8.3). Kept apart from ``gaps``
+    #: because they are somebody else's answer to chase rather than something
+    #: to allocate — and because a board showing a vehicle, a driver and enough
+    #: seats, all green, with no reservation at the lodge is the failure this
+    #: column exists for.
+    supply: list[ConcernRead] = Field(default_factory=list)
 
 
 # --------------------------------------------------------------------------- #
@@ -272,3 +286,98 @@ class FleetTruthRead(BaseModel):
     #: work in flight, and deciding that a fortnight of receipts is the new
     #: truth belongs to whoever will have to explain the margin.
     findings: list[FindingRead] = Field(default_factory=list)
+
+
+# --------------------------------------------------------------------------- #
+# The supplier side of a booking (§8.3)
+# --------------------------------------------------------------------------- #
+
+
+class SupplierBookingCreate(BaseModel):
+    supplier_id: uuid.UUID
+    #: What is being bought, in the operator's words — "3 x garden twin, HB".
+    #: "Hotel" is not something anybody can confirm.
+    service: str = Field(min_length=1, max_length=300)
+    #: What the quote was costed at. **Typed off the contract, not derived**:
+    #: the snapshot holds one figure for a whole option across every supplier
+    #: on it, so a per-hotel split would be a guess dressed as a fact.
+    expected_amount: Decimal = Field(ge=0)
+    currency: str = Field(min_length=3, max_length=3)
+    #: Default to the booking's own dates.
+    check_in: date | None = None
+    check_out: date | None = None
+    #: The day this stops being a plan. Per row, because a Mara camp in August
+    #: wanted it in February and a Diani hotel in May will take it on the
+    #: Thursday.
+    confirm_by: date | None = None
+    notes: str | None = None
+
+
+class SupplierBookingMove(BaseModel):
+    status: str
+    #: **Their** reference. Required to confirm: without one this is somebody's
+    #: recollection of a phone call, and there is nothing for the hotel to look
+    #: up while a family stands in the lobby.
+    their_reference: str | None = Field(default=None, max_length=120)
+    #: Required to cancel. The next person talking to this supplier needs to
+    #: know whether we moved the dates or they let us down.
+    reason: str | None = None
+    on: date | None = None
+
+
+class SupplierAmount(BaseModel):
+    amount: Decimal = Field(ge=0)
+    #: Refused where it differs from what was committed: what they invoiced is
+    #: a fact and the exchange rate is a decision.
+    currency: str | None = Field(default=None, min_length=3, max_length=3)
+    on: date | None = None
+
+
+class SupplierBookingRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: uuid.UUID
+    booking_id: uuid.UUID
+    supplier_id: uuid.UUID
+    service: str
+    status: str
+    their_reference: str | None
+    check_in: date | None
+    check_out: date | None
+    confirm_by: date | None
+    expected_amount: Decimal
+    #: ``null`` until the invoice arrives, which is a different thing from zero.
+    invoiced_amount: Decimal | None
+    settled_amount: Decimal | None
+    currency: str
+    requested_on: date | None
+    confirmed_on: date | None
+    settled_on: date | None
+    cancel_reason: str | None
+    notes: str | None
+    created_at: datetime
+
+
+class ExposureRead(BaseModel):
+    """What is owed to this trip's suppliers.
+
+    Per currency and never summed across them: a lodge billing in dollars
+    beside a transfer company billing in shillings is the normal case here, and
+    one added figure would be wrong in a way nobody can see.
+    """
+
+    expected: dict[str, Decimal] = Field(default_factory=dict)
+    invoiced: dict[str, Decimal] = Field(default_factory=dict)
+    settled: dict[str, Decimal] = Field(default_factory=dict)
+    #: The invoice where there is one, else the budget — a supplier who has not
+    #: invoiced is not a supplier who is owed nothing.
+    owed: dict[str, Decimal] = Field(default_factory=dict)
+    suppliers: int = 0
+    unconfirmed: int = 0
+    all_confirmed: bool = False
+
+
+class SupplyPositionRead(BaseModel):
+    exposure: ExposureRead
+    #: Unconfirmed suppliers, invoices away from budget, and anybody still owed
+    #: after the group went home.
+    concerns: list[ConcernRead] = Field(default_factory=list)
