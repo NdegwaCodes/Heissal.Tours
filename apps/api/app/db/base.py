@@ -40,6 +40,10 @@ from app.modules.leads.models import (  # noqa: F401
 )
 from app.modules.media.models import DestinationImage, PropertyImage  # noqa: F401
 from app.modules.narratives.models import Narrative  # noqa: F401
+from app.modules.operations.models import (  # noqa: F401
+    CrewMember,
+    TripAssignment,
+)
 from app.modules.park_fees.models import ParkFee  # noqa: F401
 from app.modules.portal.models import BookingAccessGrant  # noqa: F401
 from app.modules.quotes.models import (  # noqa: F401

@@ -412,8 +412,24 @@ the group total derived from it so the two always reconcile.
   - A dead link says **which kind of dead**: expired, withdrawn, or a cancelled booking
 - ☐ `apps/portal` itself — the API is built and enforced; the pages are not
 
-## Stage 8 — Operations  ☐
-- Vehicles · Drivers · Guides · Trip assignments · GPS integration · Fuel/mileage · Supplier management
+## Stage 8 — Operations  ◑
+- ☑ 8.1 **Crew and trip assignments** (`app/modules/operations/`, migration `bf98e7401b33`,
+  54 tests) — §2.5 made a vehicle a *costing input*; nothing anywhere said it was **busy**, so two
+  bookings could be priced with the same Land Cruiser over the same week
+  - `crew` is **one table** for drivers and guides, with roles as a list: a driver-guide is one
+    person, and two rows would double-book them against themselves
+  - `trip_assignments` is one vehicle **or** one person over a window. No `trips` table — the
+    booking already carries the dates, the headcount and the reference
+  - A **same-day handover is not a clash** (drop one group at the airport, collect another that
+    afternoon) but it comes back as an advisory. Two trips over the same days is refused
+  - A clash can be **overridden** with a reason that stays on the row: the point is not to make it
+    impossible, it is to make it attributable
+  - A driving **licence is a date**, so one expiring mid-safari is caught — it passes every check
+    made on the Monday and the group is in Tsavo on the day
+  - `GET /operations/departures` is the operational half of §5.2's morning list; `/operations/diary`
+    is the fleet and crew calendar
+  - The **`operations` role** finally has permissions — and takes no money
+- ☐ GPS integration · fuel and mileage capture · supplier management
 
 ---
 

@@ -109,6 +109,14 @@ PERMISSIONS: dict[str, str] = {
     # because there is nothing to read — the table holds hashes, and a listing
     # never shows a token.
     "portal:manage": "Issue and withdraw client links to their own trip",
+    # --- Stage 8.1: crew and trip assignments ---
+    "crew:read": "View the register of drivers and guides",
+    "crew:manage": "Add and edit drivers and guides",
+    "assignment:read": "View the departure board, the diary and what is on a trip",
+    # Kept apart from reading: committing a vehicle or a person to a trip is
+    # what makes the fleet calendar true, and an operator overriding a clash is
+    # making a decision somebody will be held to on the Tuesday morning.
+    "assignment:manage": "Put vehicles and crew on trips, and take them off",
 }
 
 # Reference read/manage permission keys, grouped for role assignment.
@@ -169,8 +177,27 @@ ROLE_DEFINITIONS: dict[str, RoleDefinition] = {
     },
     "operations": {
         "name": "Operations",
-        "description": "Trip operations and fleet (extended in Stage 8).",
-        "permissions": ["user:read"],
+        "description": "Runs the trips: the fleet, the crew and the departure board.",
+        "permissions": [
+            "user:read",
+            "vehicle:read",
+            "route:read",
+            "destination:read",
+            "accommodation:read",
+            "client:read",
+            # The booking is the trip. Read-only: operations crews a trip, it
+            # does not sell one or take money for one.
+            "booking:read",
+            "crew:read",
+            "crew:manage",
+            "assignment:read",
+            "assignment:manage",
+            # They talk to the client about pickups and to suppliers about
+            # rooms, and that belongs in the same log as everything else
+            # (§5.3).
+            "comm:read",
+            "comm:log",
+        ],
     },
     "finance": {
         "name": "Finance",

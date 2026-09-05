@@ -1681,3 +1681,80 @@ lives in the backend, and the rule that no cost reaches a client is worth nothin
 React component. When the app is built, the one piece of machinery worth adding is exchanging the
 fragment token for a short-lived session so it is not held in JavaScript for the length of a
 visit.
+
+**A vehicle was a costing input, never a thing that could be busy** (Stage 8.1, 2026-09-05)
+§2.5 put vehicles in the database so a drive could be charged: a Land Cruiser with a fuel
+consumption and a daily operating cost, which §4.2 reads. Nothing anywhere said a particular
+vehicle was *out*. Two bookings could be priced with the same one over the same week and the first
+anybody would know is a Tuesday morning in Diani with one vehicle and two groups. §7.1 made it
+worse rather than better: a confirmed booking now existed, and still nothing said who was driving.
+
+Two tables close it. **`crew`** is the register of drivers and guides — one table, with `roles` as
+a list, because in this market a driver-guide is usually one person. Two tables, or two rows,
+would mean assigning the same human twice, double-booking them against themselves, and counting
+them twice on a cost sheet. **`trip_assignments`** is one vehicle *or* one person committed to one
+booking over a window, with a CHECK enforcing the exclusive-or: a row with neither commits nothing,
+and a row with both would make "what is out on the 5th" a query with a branch in it.
+
+**No `trips` table.** The booking already carries the dates, the headcount and the reference, and
+a second row repeating them is a second thing to keep in step. A group of twelve in two Land
+Cruisers with two driver-guides is four assignment rows and no special case.
+
+**The window is stored, not derived from the booking.** A vehicle leaving Nairobi the night before
+a coast pickup is out that night, and a fleet calendar that says otherwise will hand it to
+somebody else on the Sunday.
+
+**The overlap rule, which is the part worth reading twice.** A vehicle dropping a group at the
+airport on the 5th and collecting another that afternoon is a normal Tuesday at a coast operator;
+a vehicle on two trips over the 5th and 6th is a Tuesday that does not happen. So: any shared day
+is a clash, **except** a single shared day that is one window's last and the other's first — and
+that handover is still returned as an advisory, because a tight one and a comfortable one look
+identical once the response says only "created".
+
+The first version of that rule was wrong at the edges, and the tests name the case. Treating
+"shares only a boundary day" as the handover makes two *single-day* trips on the 5th read as a
+handover, which is two groups and one vehicle; and it gave different answers depending on which
+window was asked. The rule that holds is: exactly one shared day, **and** neither window is that
+day. Four edge tests pin it, including both directions of the single-day case.
+
+**A clash is refused; an override is recorded.** The default is no, because the alternative is a
+calendar that documents disasters rather than preventing them. But an operator who knows the first
+booking is cancelling on Friday needs a way through, and the way through leaves `override_reason`
+and `assigned_by` on the row. The point is not to make it impossible — it is to make it
+attributable, which is the same shape as §5.3's amendment stamp.
+
+**A cancelled booking releases what it held** — by exclusion rather than deletion: the clash query
+only looks at active bookings. Otherwise the calendar fills with vehicles nobody is using, and an
+operator told twice that a free vehicle is busy stops believing it. Crewing a cancelled booking is
+refused outright, with that sentence as the reason.
+
+**The licence is a date, not a valid/invalid flag.** The case worth catching is a licence expiring
+*in the middle of a safari*: it passes every check made on the Monday and the group is in Tsavo on
+the day it lapses. Only a date can catch that, and the refusal names the day. A licence expiring
+shortly *after* a trip is a warning on the board rather than a refusal — it will not stop this
+trip, it will stop the next one.
+
+**Seats are counted across the booking, not per vehicle**, because twelve people in two Land
+Cruisers is the normal answer and a per-vehicle check would refuse it. And they are not counted at
+all until there is a vehicle: "no vehicle" already says it, and one problem should be reported
+once.
+
+**The role is on the assignment, not inferred from the person.** Somebody down as a driver-guide
+can be sent out on one trip to drive and on another purely to guide. Reading it off the person
+would count a guide as a driver and report a trip with nobody at the wheel as ready. Where a
+person has more than one role and the caller does not say, the assignment is refused: a trip sheet
+has to name one, and guessing is how it ends up saying something nobody meant.
+
+**A missing guide is deliberately not reported.** Whether a trip needs one depends on whether the
+client asked and paid for one, and a board that complained about every self-drive booking is a
+board nobody opens — §5.2's lesson about closing leads on a timer, applied to departures.
+
+**An assignment is deleted, not voided** — the one place this codebase does hard-delete, and the
+distinction is deliberate: §5.3's log records things that *happened*, while an assignment is a
+*plan*. Nobody needs the history of a vehicle pencilled in on Tuesday and swapped on Wednesday,
+and keeping it would make "what is out on the 5th" a query that has to exclude ghosts.
+
+**The `operations` role finally has permissions.** It has said "extended in Stage 8" since Stage 1
+and carried only `user:read`. It now reads bookings, the fleet and the catalogue, manages crew and
+assignments, and logs communications (§5.3) — and it takes no money: `booking:record_payment` is
+finance's, and a test asserts operations is refused at the till.
